@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Vendored dnSpyEx BAML decompiler (Extensions/dnSpy.BamlDecompiler), compiled for net8.0 without WPF: only the
+    BAML reader and the BAML -> XAML rewriter are taken, not the dnSpy UI parts (menus, tool tips, tabs, settings
+    page). See engine/vendor/README.md. dnSpyEx is GPL-3.0-or-later; the submodule is used unmodified.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>dnSpy.BamlDecompiler</AssemblyName>
+    <RootNamespace>dnSpy.BamlDecompiler</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SignAssembly>false</SignAssembly>
+    <!-- Vendored third-party code: its warnings are not ours to fix. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningLevel>0</WarningLevel>
+    <NoWarn>$(NoWarn);CS8632;CS1685;CS0618;CS0612;CS0067;CS0169;CS0414;CS0649;CS1591;CS0108;CS0109;CS0162;CS0164;CS0219;CS0252;CS0253;CS0282;CS1998;CS8509;NU1701</NoWarn>
+    <DnSpyEx>$(MSBuildThisFileDirectory)../../../external/dnSpyEx</DnSpyEx>
+    <Baml>$(DnSpyEx)/Extensions/dnSpy.BamlDecompiler</Baml>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="dnlib" Version="4.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(Baml)/Baml/**/*.cs" />
+    <Compile Include="$(Baml)/Handlers/**/*.cs" />
+    <Compile Include="$(Baml)/Rewrite/**/*.cs" />
+    <Compile Include="$(Baml)/Xaml/**/*.cs" />
+    <Compile Include="$(Baml)/Annotations.cs;$(Baml)/IHandlers.cs;$(Baml)/IRewritePass.cs;$(Baml)/RecursionCounter.cs;$(Baml)/XamlContext.cs;$(Baml)/XamlDecompiler.cs;$(Baml)/XmlnsDictionary.cs;$(Baml)/DummyAssemblyRefFinder.cs;$(Baml)/XamlOutputCreator.cs;$(Baml)/BamlElement.cs" />
+    <Compile Remove="$(Baml)/Baml/KnownThings.gen.cs" />
+    <Compile Include="$(Baml)/Properties/dnSpy.BamlDecompiler.Resources.Designer.cs" />
+    <Compile Include="VendorInternalsVisibleTo.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(Baml)/Properties/dnSpy.BamlDecompiler.Resources.resx" LogicalName="dnSpy.BamlDecompiler.Properties.dnSpy.BamlDecompiler.Resources.resources" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../ContractsLogic/DnSpySql.Vendor.ContractsLogic.csproj" />
+    <ProjectReference Include="../DnSpyDecompiler/DnSpySql.Vendor.DnSpyDecompiler.csproj" />
+    <ProjectReference Include="../Decompiler/DnSpySql.Vendor.Decompiler.csproj" />
+  </ItemGroup>
+
+</Project>

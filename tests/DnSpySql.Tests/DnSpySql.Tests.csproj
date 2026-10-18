@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    End-to-end tests: each test runs the built dnspysql binary (./build.sh first, or set DNSPYSQL to its path)
+    against a fresh copy of tests/corpus/Sample, so the SQL layer (libxsql/SQLite) and the engine are exercised
+    together, as a user runs them.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <!--
+    Build the sample assemblies and copy them next to the tests: sample/Sample.dll (dnspysql's own cases) and
+    sample/SampleTarget.dll + .pdb (the cases in ParityTests). Both are benign test programs.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../corpus/Sample/Sample.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../corpus/SampleTarget/SampleTarget.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopySample" AfterTargets="Build">
+    <MSBuild Projects="../corpus/Sample/Sample.csproj;../corpus/SampleTarget/SampleTarget.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="SampleAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <SamplePdb Include="@(SampleAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" Condition="Exists('%(RootDir)%(Directory)%(Filename).pdb')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SampleAssembly);@(SamplePdb)" DestinationFolder="$(OutDir)sample" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

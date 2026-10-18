@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+# dpq: sandboxed dnspysql sessions, one container per sample (modelled on idasql's idq).
+#
+#   dpq open <file>              start a session (HTTP inside the container, no network), prints its id
+#   dpq q <id-prefix> <sql>...   run SQL in a session
+#   dpq ls                       list sessions
+#   dpq close <id-prefix>        stop a session (annotations are kept in the dpq-projects volume)
+#   dpq run query <file> <sql>   one-shot query, no session
+#   dpq run repl <file>          one-shot interactive shell
+#
+# Sessions: uid 1000, read-only root, all capabilities dropped, no-new-privileges, tmpfs /tmp, --network none,
+# memory/pid limits. The sample is mounted read-only; saved outputs and project files go to the dpq-projects volume
+# (/projects/<sha256>/). Environment: DPQ_IMAGE (default dnspysql), DPQ_MEMORY (default 4g), DPQ_NETWORK (default none).
+set -euo pipefail
+IMAGE="${DPQ_IMAGE:-dnspysql}"
+MEMORY="${DPQ_MEMORY:-4g}"
+NETWORK="${DPQ_NETWORK:-none}"
+VOLUME=dpq-projects
+SANDBOX=(--read-only --tmpfs /tmp:rw,exec,size=512m --tmpfs /home/dnspysql:rw,size=64m --cap-drop ALL
+         --security-opt no-new-privileges --pids-limit 512 --memory "$MEMORY" --user 1000:1000)
+
+die() { echo "dpq: $*" >&2; exit 1; }
+sha() { sha256sum "$1" | cut -c1-64; }
+
+find_session() {
+  local prefix="$1" hits
+  hits=$(docker ps -a --filter "label=dpq.sha" --format '{{.Label "dpq.sha"}}' | grep "^$prefix" || true)
+  [ -n "$hits" ] || die "no session matches '$prefix' (dpq ls)"
+  [ "$(echo "$hits" | wc -l)" -eq 1 ] || die "ambiguous id '$prefix': $(echo $hits)"
+  echo "$hits"
+}
+
+ensure_volume() {
+  docker volume inspect "$VOLUME" >/dev/null 2>&1 || docker volume create "$VOLUME" >/dev/null
+  # make sure uid 1000 owns the per-sample directory
+  docker run --rm -v "$VOLUME:/projects" --user 0 --entrypoint sh "$IMAGE" -c "mkdir -p /projects/$1 && chown 1000:1000 /projects /projects/$1" >/dev/null
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  open)
+    file="$(readlink -f "${1:?usage: dpq open <file>}")"; [ -f "$file" ] || die "no such file: $file"
+    s=$(sha "$file"); name="dpq-${s:0:12}"
+    if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+      docker start "$name" >/dev/null; echo "$s"; exit 0
+    fi
+    ensure_volume "$s"
+    token=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    docker run -d --name "$name" --label "dpq.sha=$s" --label "dpq.file=$(basename "$file")" --label "dpq.token=$token" \
+      --network "$NETWORK" "${SANDBOX[@]}" \
+      -v "$file:/samples/$(basename "$file"):ro" -v "$VOLUME:/projects" \
+      "$IMAGE" "/samples/$(basename "$file")" --project "/projects/$s/project.dnspysql.json" \
+      --http 8081 --bind 127.0.0.1 --token "$token" >/dev/null
+    for _ in $(seq 1 60); do
+      if docker exec "$name" /opt/dnspysql/dnspysql --remote http://127.0.0.1:8081 --token "$token" -c "SELECT 1" >/dev/null 2>&1; then
+        echo "$s"; exit 0
+      fi
+      sleep 1
+    done
+    docker logs "$name" | tail -20 >&2; die "session did not become ready"
+    ;;
+  q|query)
+    s=$(find_session "${1:?usage: dpq q <id> <sql>}"); shift
+    name="dpq-${s:0:12}"; token=$(docker inspect -f '{{index .Config.Labels "dpq.token"}}' "$name")
+    args=(); for sql in "$@"; do args+=(-c "$sql"); done
+    docker exec "$name" /opt/dnspysql/dnspysql --remote http://127.0.0.1:8081 --token "$token" ${DPQ_FORMAT:+--format "$DPQ_FORMAT"} "${args[@]}"
+    ;;
+  ls)
+    docker ps -a --filter "label=dpq.sha" --format 'table {{.Label "dpq.sha"}}\t{{.Label "dpq.file"}}\t{{.Status}}'
+    ;;
+  close)
+    s=$(find_session "${1:?usage: dpq close <id>}"); name="dpq-${s:0:12}"
+    token=$(docker inspect -f '{{index .Config.Labels "dpq.token"}}' "$name")
+    docker exec "$name" /opt/dnspysql/dnspysql --remote http://127.0.0.1:8081 --token "$token" \
+      -c "SELECT save_project()" >/dev/null 2>&1 || true
+    docker rm -f "$name" >/dev/null; echo "closed $s"
+    ;;
+  run)
+    mode="${1:?usage: dpq run query|repl <file> [sql]}"; file="$(readlink -f "${2:?file}")"; shift 2
+    base="/samples/$(basename "$file")"
+    case "$mode" in
+      query) args=(); for sql in "$@"; do args+=(-c "$sql"); done
+             docker run --rm --network none "${SANDBOX[@]}" -v "$file:$base:ro" "$IMAGE" "$base" --no-project "${args[@]}" ;;
+      repl)  docker run --rm -it --network none "${SANDBOX[@]}" -v "$file:$base:ro" "$IMAGE" "$base" --no-project ;;
+      *) die "unknown run mode $mode" ;;
+    esac
+    ;;
+  *)
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

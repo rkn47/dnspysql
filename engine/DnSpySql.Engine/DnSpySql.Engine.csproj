@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Loaded as a component by the native host: emits runtimeconfig.json + deps.json -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <RollForward>LatestMajor</RollForward>
+    <RootNamespace>DnSpySql</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="dnlib" Version="4.5.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- dnSpyEx's dnlib-backed decompiler, vendored under engine/vendor. It
+         replaces the upstream ICSharpCode.Decompiler NuGet package: that one
+         reads System.Reflection.Metadata, which means parsing every assembly a
+         second time and re-serializing the dnlib model after each edit. -->
+    <ProjectReference Include="../vendor/ILSpyCore/DnSpySql.Vendor.ILSpyCore.csproj" />
+    <!-- dnSpy's BAML -> XAML decompiler (baml table, export_project). -->
+    <ProjectReference Include="../vendor/BamlDecompiler/DnSpySql.Vendor.BamlDecompiler.csproj" />
+  </ItemGroup>
+
+</Project>

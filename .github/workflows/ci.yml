@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # Only the two nested dnSpyEx submodules the build compiles (see INSTALL.md); --recursive would fetch many more.
+      - name: Nested submodules
+        shell: bash
+        run: >
+          git -C external/dnSpyEx submodule update --init --depth 1
+          Extensions/ILSpy.Decompiler/ICSharpCode.Decompiler Extensions/ILSpy.Decompiler/NRefactory
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build
+          ./build.sh
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          choco install ninja -y --no-progress || exit /b 1
+          call build.cmd
+
+      - name: Smoke test
+        shell: bash
+        run: build/dnspysql --version && build/dnspysql build/engine/DnSpySql.Engine.dll --no-project --dnspy-xml off -c "SELECT count(*) FROM types"
+
+      - name: Tests
+        run: dotnet test tests/DnSpySql.Tests --nologo
+
+      # The build regenerates docs/SCHEMA.md from the code; a stale copy means a schema change was committed without it.
+      # (Linux only: Windows runners check files out with CRLF.)
+      - name: docs/SCHEMA.md and the README table list are current
+        if: runner.os == 'Linux'
+        run: |
+          git diff --exit-code -- docs/SCHEMA.md
+          python3 tools/docs/readme_tables.py --check

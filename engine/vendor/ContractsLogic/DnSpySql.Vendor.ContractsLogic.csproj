@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Vendored dnSpyEx source, compiled for net8.0. See engine/vendor/README.md.
+    dnSpyEx is GPL-3.0-or-later; the submodule is used unmodified (THIRD_PARTY_NOTICES.md).
+
+    One project per upstream dnSpy assembly. The boundaries are load-bearing, not
+    cosmetic: the ILSpy fork overrides NRefactory members that are declared
+    `protected internal`, which is only legal from another assembly. Merging them
+    into a single assembly fails with CS0507.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>dnSpy.Contracts.Logic</AssemblyName>
+    <RootNamespace>dnSpy.Contracts.Logic</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SignAssembly>false</SignAssembly>
+    <!-- Vendored third-party code: its warnings are not ours to fix. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningLevel>0</WarningLevel>
+    <NoWarn>$(NoWarn);CS8632;CS1685;CS0618;CS0612;CS0067;CS0169;CS0414;CS0649;CS1591;CS0108;CS0109;CS0162;CS0164;CS0219;CS0252;CS0253;CS0282;CS1998;CS8509;SYSLIB0011;SYSLIB0050;SYSLIB0051;NU1701</NoWarn>
+    <DnSpyEx>$(MSBuildThisFileDirectory)../../../external/dnSpyEx</DnSpyEx>
+    <IlSpyFork>$(DnSpyEx)/Extensions/ILSpy.Decompiler</IlSpyFork>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="dnlib" Version="4.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(DnSpyEx)/dnSpy/dnSpy.Contracts.Logic/**/*.cs" Exclude="$(DnSpyEx)/dnSpy/dnSpy.Contracts.Logic/Utilities/NuGetPackageLocator.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(DnSpyEx)/dnSpy/dnSpy.Contracts.Logic/Properties/dnSpy.Contracts.Logic.Resources.resx" LogicalName="dnSpy.Contracts.Logic.Properties.dnSpy.Contracts.Logic.Resources.resources" />
+  </ItemGroup>
+
+</Project>

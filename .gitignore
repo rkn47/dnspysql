@@ -1,0 +1,17 @@
+# Build output: build/, build-dev/, build-old/, ... at the root (build.cmd and build.sh are files, so they stay)
+/build*/
+bin/
+obj/
+TestResults/
+
+# Editors and local tooling, notes kept off GitHub
+*.user
+.vs/
+.claude/
+/CLAUDE.md
+/tools/corpus/
+/docs/ROADMAP.md
+
+# Analysis by-products: annotation projects of samples, crash dumps
+*.dnspysql.json
+*.dmp

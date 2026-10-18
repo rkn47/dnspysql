@@ -1,0 +1,11 @@
+build
+build-*
+**/bin
+**/obj
+.git
+.vs
+.claude
+CLAUDE.md
+tools/corpus
+*.dnspysql.json
+*.dmp

@@ -1,0 +1,12 @@
+<Project>
+  <!-- dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE. -->
+
+  <!--
+    The vendor projects compile dnSpyEx's source folders by glob. A dnSpyEx build inside the submodule (opening
+    dnSpy.sln in an IDE is enough) leaves obj/ and bin/ there, whose generated AssemblyAttributes.cs would be compiled
+    too and fail with CS0579 (duplicate TargetFrameworkAttribute). Leave them out.
+  -->
+  <ItemGroup Condition="'$(DnSpyEx)' != ''">
+    <Compile Remove="$(DnSpyEx)/**/obj/**;$(DnSpyEx)/**/bin/**" />
+  </ItemGroup>
+</Project>

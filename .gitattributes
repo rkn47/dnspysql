@@ -1,0 +1,5 @@
+# Shell scripts and the Dockerfile must keep LF even on a Windows checkout (core.autocrlf), or they break in a container.
+*.sh text eol=lf
+dpq text eol=lf
+Dockerfile text eol=lf
+*.cmd text eol=crlf

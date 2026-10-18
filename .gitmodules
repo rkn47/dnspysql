@@ -1,0 +1,6 @@
+[submodule "external/libxsql"]
+	path = external/libxsql
+	url = https://github.com/0xeb/libxsql
+[submodule "external/dnSpyEx"]
+	path = external/dnSpyEx
+	url = https://github.com/dnSpyEx/dnSpy
