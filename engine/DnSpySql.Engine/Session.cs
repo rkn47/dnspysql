@@ -24,6 +24,8 @@ public sealed class Session : IDisposable
     public const string ToolName = "dnspysql";
     /// <summary>The dnspysql version, as the native host reports it at init.</summary>
     public static string ToolVersion { get; set; } = typeof(Session).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+    /// <summary>The commit the host was built from (git describe), so a stale build shows in the binary table.</summary>
+    public static string? ToolCommit { get; set; }
 
     public Workspace Ws { get; } = new();
     public Database Db { get; }

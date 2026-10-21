@@ -68,6 +68,66 @@ public static class XrefTables
             .Bool("is_external", x => x.Def == null)
             .Estimate(100_000));
 
+        // A callvirt names the slot it calls through (Shape::Area, IShape::Area), so call_edges has no edge to an override
+        // or an interface implementation: these are the calls that can dispatch there. callers lists them with via <> 'direct'.
+        // A filter value that names no method (0, a token of another table, a module not loaded) matches no rows, as an
+        // equality filter on a column does, rather than failing the query.
+        MethodDef? MethodAt(long h)
+        {
+            if (h == 0) return null;
+            try { return ws.Resolve(ws.Normalize(h)).item as MethodDef; }
+            catch (SqlException) { return null; }
+        }
+        IEnumerable<(XRef x, MethodDef target, MethodDef slot, bool iface)> Dispatch(Constraints c)
+        {
+            IEnumerable<MethodDef> targets = c.Long("method") is long mh
+                ? MethodAt(mh) is { } one ? [one] : []
+                : ws.Modules(c).SelectMany(m => m.Module.GetTypes()).SelectMany(t => t.Methods).Where(m => m.IsVirtual && !m.DeclaringType.IsInterface);
+            foreach (var target in targets)
+                foreach (var (slot, iface) in Analyzer.DispatchSlots(s, target))
+                    foreach (var x in ix.To(ws.Find(slot.Module)!.H(slot)))
+                        if (x.Kind is "callvirt" or "ldvirtftn") yield return (x, target, slot, iface);
+        }
+        db.Register(new Table<(XRef x, MethodDef target, MethodDef slot, bool iface)>("dispatch_calls",
+                "Virtual calls that can reach a method through a base or interface method it overrides or implements (the call site names " +
+                "that slot, so call_edges has no edge to the method itself): dnSpy's 'Virtual Used By'. WHERE method = <handle> for one method") { Domain = "xrefs" }
+            .Source(Dispatch)
+            .Int("module", r => ws.Find(r.target.Module)?.Id, pushdown: Pushdown.Eq)
+            .Int("method", r => ws.Find(r.target.Module)!.H(r.target), pushdown: Pushdown.Eq, doc: "the override or implementation the call can reach")
+            .Text("method_name", r => r.target.FullName)
+            .Int("caller", r => r.x.FromHandle)
+            .Text("caller_name", r => r.x.From.FullName)
+            .Int("call_site", r => r.x.Offset, doc: "IL offset in caller")
+            .Text("kind", r => r.x.Kind)
+            .Int("slot", r => ws.Find(r.slot.Module)!.H(r.slot), doc: "the base or interface method the call site names")
+            .Text("slot_name", r => r.slot.FullName)
+            .Text("via", r => r.iface ? "interface" : "virtual", doc: "virtual (a base class method) | interface"));
+
+        // callers was a view over call_edges; it is a table so the direct calls and the dispatched ones answer one handle
+        // filter (a compound view re-checks WHERE method = <bare token> against the full handle and loses every row).
+        IEnumerable<(XRef x, long method, MethodDef? slot, bool iface)> Callers(Constraints c)
+        {
+            if (c.Long("method") is long mh)
+            {
+                if (mh == 0) yield break; // 0 is "external" in call_edges: no method to have callers
+                var h = ws.Normalize(mh);
+                foreach (var x in ix.To(h)) if (x.IsCall) yield return (x, h, null, false);
+            }
+            else
+                foreach (var x in ix.All) if (x.IsCall && x.DefHandle is long d) yield return (x, d, null, false);
+            foreach (var (x, target, slot, iface) in Dispatch(c)) yield return (x, ws.Find(target.Module)!.H(target), slot, iface);
+        }
+        db.Register(new Table<(XRef x, long method, MethodDef? slot, bool iface)>("callers",
+                "Who calls a method: WHERE method = <handle>. via = direct (the call names the method), virtual or interface (a callvirt on a " +
+                "base or interface method it overrides or implements, which can dispatch to it; see dispatch_calls)") { Domain = "xrefs" }
+            .Source(Callers)
+            .Int("method", r => r.method, pushdown: Pushdown.Eq)
+            .Int("caller", r => r.x.FromHandle)
+            .Text("caller_name", r => r.x.From.FullName)
+            .Int("call_site", r => r.x.Offset, doc: "IL offset in caller")
+            .Text("kind", r => r.x.Kind)
+            .Text("via", r => r.slot == null ? "direct" : r.iface ? "interface" : "virtual", doc: "direct | virtual | interface"));
+
         // ================= string references (dnSpy String References window) =================
         db.Register(new Table<(LoadedModule m, string kind, string literal, IMDTokenProvider referrer, uint? offset, string detail)>("string_refs",
                 "String literals with their referrers: ldstr in IL, string constants, string attribute arguments (dnSpy StringSearcher)") { Domain = "xrefs" }
@@ -328,9 +388,7 @@ public static class Analyzer
                     // overrides or implements. Only a virtual call (callvirt, ldvirtftn) on that slot can dispatch here; a
                     // plain `call` of a base method (base.M()) runs that method itself.
                     var m = (MethodDef)item;
-                    if (!m.IsVirtual) break;
-                    var slots = BaseMethods(m).Concat(Relation(s, "method.implements", lm, m).Select(h => h.Def).OfType<MethodDef>()).Distinct().ToList();
-                    foreach (var slot in slots)
+                    foreach (var (slot, _) in DispatchSlots(s, m))
                         if (ws.Find(slot.Module) is { } sl)
                             foreach (var h in Methods(s, rel, ix.To(sl.H(slot)).Where(x => x.Kind is "callvirt" or "ldvirtftn"), $"via {slot.DeclaringType?.Name}::{slot.Name}"))
                                 yield return h;
@@ -504,6 +562,23 @@ public static class Analyzer
         a.MethodSig is { } sa && b.MethodSig is { } sb
         && (new SigComparer(SigComparerOptions.DontCompareTypeScope | SigComparerOptions.DontCompareReturnType).Equals(sa, sb)
             || sa.Params.Count == sb.Params.Count && sa.Params.Select(p => p?.TypeName).SequenceEqual(sb.Params.Select(p => p?.TypeName)));
+
+    /// <summary>
+    /// The slots a virtual call can reach this method through: base methods it overrides and interface methods it
+    /// implements (explicitly, or implicitly by name and signature), in loaded modules. A call site references the slot,
+    /// not the override, so these are where to look for its callers. interface = the slot is an interface method.
+    /// </summary>
+    public static IEnumerable<(MethodDef slot, bool iface)> DispatchSlots(Session s, MethodDef m)
+    {
+        if (!m.IsVirtual) yield break;
+        var seen = new HashSet<MethodDef>();
+        foreach (var b in BaseMethods(m))
+            if (s.Ws.Find(b.Module) != null && seen.Add(b)) yield return (b, b.DeclaringType.IsInterface);
+        foreach (var i in AllInterfaces(m.DeclaringType))
+            if (Try(() => i.ResolveTypeDef()) is { } itd && s.Ws.Find(itd.Module) != null)
+                foreach (var im in itd.Methods.Where(x => x.Name == m.Name && SameSig(x, m)))
+                    if (seen.Add(im)) yield return (im, true);
+    }
 
     /// <summary>Base methods (virtual chain + explicit .override targets) that this method overrides.</summary>
     public static IEnumerable<MethodDef> BaseMethods(MethodDef m)

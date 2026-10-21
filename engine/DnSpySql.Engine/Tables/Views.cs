@@ -8,8 +8,6 @@ public static class Views
 {
     public static readonly (string name, string doc, string sql)[] All =
     {
-        ("callers", "Who calls a method: WHERE method = <handle>",
-            "SELECT dst AS method, src AS caller, src_name AS caller_name, call_site, kind FROM call_edges WHERE dst <> 0"),
         ("callees", "What a method calls: WHERE method = <handle> (external callees have callee = 0)",
             "SELECT src AS method, dst AS callee, dst_name AS callee_name, dst_assembly, call_site, kind, is_external FROM call_edges"),
         ("external_calls", "Calls leaving the loaded modules, grouped by target (imports-like view)",

@@ -139,7 +139,7 @@ public static class TriageTables
 
     // ---- field_inits -------------------------------------------------------------------------------------------------
 
-    static IEnumerable<FieldInit> Inits(Session s, LoadedModule m)
+    internal static IEnumerable<FieldInit> Inits(Session s, LoadedModule m)
     {
         var fold = new ProtectionTables.Fold(s);
         foreach (var t in m.Module.GetTypes())
@@ -330,7 +330,7 @@ public static class TriageTables
 
     // A call made through a proxy (a static method that only passes its arguments on, which obfuscators put in front
     // of every API) is reported where the proxy is called, the code that means it; up to three proxies deep.
-    static IEnumerable<Capability> Capabilities(Session s, LoadedModule m) => CapabilitiesAt(s, m).SelectMany(c => ThroughProxies(s, c, 0));
+    internal static IEnumerable<Capability> Capabilities(Session s, LoadedModule m) => CapabilitiesAt(s, m).SelectMany(c => ThroughProxies(s, c, 0));
 
     static IEnumerable<Capability> ThroughProxies(Session s, Capability c, int depth)
     {
@@ -442,7 +442,7 @@ public static class TriageTables
                || target.Name.String is "Branch" or "FromOid";
     }
 
-    static IEnumerable<Ioc> Iocs(Session s, LoadedModule m)
+    internal static IEnumerable<Ioc> Iocs(Session s, LoadedModule m)
     {
         // a literal used at many sites is searched once
         var found = new Dictionary<string, List<(string Kind, string Value, string Source)>>(StringComparer.Ordinal);

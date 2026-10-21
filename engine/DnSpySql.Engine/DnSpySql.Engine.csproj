@@ -12,6 +12,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The workflow guides (dnspysql_guides table, MCP prompts): DnSpySql.Guides.<topic>.md -->
+    <EmbeddedResource Include="Guides/*.md" LogicalName="DnSpySql.Guides.%(Filename).md" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="dnlib" Version="4.5.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
   </ItemGroup>

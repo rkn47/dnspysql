@@ -46,7 +46,8 @@ public static class ProtectionTables
         // ---- embedded_pes: every PE a module carries -----------------------------------------------------------------
         s.Db.Register(new Table<Carved>("embedded_pes",
                 "PE files inside a module: anywhere in its file bytes (the overlay, uncompressed resources, a section) and in " +
-                "resources or .resources entries, also behind gzip/zlib/deflate. Size from the PE headers; " +
+                "resources or .resources entries, also behind gzip/zlib/deflate, and one stored in pieces across numbered resources " +
+                "(part1..partN: joined in order or reversed, also as base64 text). Size from the PE headers; " +
                 "SELECT open_bytes(data, name) FROM embedded_pes WHERE is_dotnet opens the next stage") { Domain = "triage" }
             .Source(c => s.Ws.Modules(c).SelectMany(Carve))
             .Int("module", r => r.M.Id, pushdown: Pushdown.Eq)
@@ -119,7 +120,7 @@ public static class ProtectionTables
 
     // ---- protections ---------------------------------------------------------------------------------------------------
 
-    static IEnumerable<Finding> Detect(Session s, LoadedModule m)
+    internal static IEnumerable<Finding> Detect(Session s, LoadedModule m)
     {
         var md = m.Module;
         var found = new List<Finding>();
@@ -334,29 +335,21 @@ public static class ProtectionTables
 
     const int MaxCarved = 256 << 20;
 
-    static IEnumerable<Carved> Carve(LoadedModule m)
+    internal static IEnumerable<Carved> Carve(LoadedModule m)
     {
         var seen = new HashSet<string>();
         string Key(byte[] b, long at, long size) => $"{size}:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(b.AsSpan((int)at, (int)Math.Min(size, Math.Min(4096, b.Length - at)))))}";
         // resources and .resources entries: a PE as it is, or behind compression
         foreach (var (where, data) in Blobs(m))
-        {
-            if (Header(data, 0) is { } raw)
+            if (PeIn(m, where, data) is { } c)
             {
-                seen.Add(Key(data, 0, raw.Size));
-                yield return new Carved(m, where, 0, raw.Size, raw.Machine, raw.Dll, data);
-                continue;
+                seen.Add(Key(c.Source, c.Offset, c.Size));
+                yield return c;
             }
-            foreach (int skip in new[] { 0, 4 })
-                foreach (var kind in new[] { "gzip", "zlib", "deflate" })
-                    if (Inflate(data, skip, kind) is [(byte)'M', (byte)'Z'] && InflateAll(data, skip, kind) is { } inflated && Header(inflated, 0) is { } pe)
-                    {
-                        seen.Add(Key(inflated, 0, pe.Size));
-                        yield return new Carved(m, $"{where} ({kind}{(skip > 0 ? " after a 4-byte length" : "")})", 0, pe.Size, pe.Machine, pe.Dll, inflated);
-                        goto next;
-                    }
-            next:;
-        }
+        // a PE stored in pieces, put back together (one row per payload, not per order tried)
+        foreach (var (where, data) in SplitPayloads(m))
+            if (PeIn(m, where, data) is { } c && seen.Add(Key(c.Source, c.Offset, c.Size)))
+                yield return c;
         // the file bytes: an MZ with a valid PE header anywhere but at the start (the module itself)
         var file = m.DiskBytes;
         var sections = m.FileMetadata.PEImage.ImageSectionHeaders;
@@ -372,6 +365,94 @@ public static class ProtectionTables
             int next = file.AsSpan(at + 1).IndexOf("MZ"u8);
             at = next < 0 ? -1 : at + 1 + next;
         }
+    }
+
+    // A blob that is a PE, as it is or behind gzip/zlib/deflate (at the start or after a 4-byte length); else null.
+    static Carved? PeIn(LoadedModule m, string where, byte[] data)
+    {
+        if (Header(data, 0) is { } raw) return new Carved(m, where, 0, raw.Size, raw.Machine, raw.Dll, data);
+        foreach (int skip in new[] { 0, 4 })
+            foreach (var kind in new[] { "gzip", "zlib", "deflate" })
+                if (Inflate(data, skip, kind) is [(byte)'M', (byte)'Z'] && InflateAll(data, skip, kind) is { } inflated && Header(inflated, 0) is { } pe)
+                    return new Carved(m, $"{where} ({kind}{(skip > 0 ? " after a 4-byte length" : "")})", 0, pe.Size, pe.Machine, pe.Dll, inflated);
+        return null;
+    }
+
+    // stem + index (+ extension): part1, Part_02, chunk-3.bin, data.004 ...
+    static readonly System.Text.RegularExpressions.Regex Indexed = new(@"^(.*?)(\d{1,6})(\.[A-Za-z0-9]{1,8})?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    const int MaxParts = 4096;
+
+    /// <summary>
+    /// A next stage stored in pieces: resources (or entries of one .resources file) named with a common stem and
+    /// consecutive indexes, joined in index order and in reverse order; text pieces (or bytes that are base64 text) are
+    /// also joined as text, reversed, and base64-decoded. Each candidate goes to the PE check (PeIn), so only one that
+    /// is a PE, plain or compressed, is reported; the location says which pieces and how they were joined.
+    /// </summary>
+    static IEnumerable<(string Where, byte[] Data)> SplitPayloads(LoadedModule m)
+    {
+        var parts = new List<(string Container, string Name, byte[]? Bytes, string? Text)>();
+        foreach (var r in m.Module.Resources.OfType<EmbeddedResource>())
+        {
+            byte[] data;
+            try { data = r.CreateReader().ToArray(); } catch (Exception) { continue; }
+            if (data.Length >= 4 && BitConverter.ToUInt32(data, 0) == 0xBEEFCACE && ResourceTables.ReadSet(m, r) is { } set)
+            {
+                foreach (var e in set.ResourceElements)
+                    switch (ResourceTables.ElementValue(e))
+                    {
+                        case byte[] b: parts.Add((r.Name, e.Name, b, null)); break;
+                        case string str: parts.Add((r.Name, e.Name, null, str)); break;
+                    }
+            }
+            else parts.Add(("", r.Name, data, null));
+        }
+
+        var groups = parts.Select(p => (p, x: Indexed.Match(p.Name)))
+            .Where(t => t.x.Success)
+            .GroupBy(t => (t.p.Container, Stem: t.x.Groups[1].Value, Ext: t.x.Groups[3].Value, Text: t.p.Text != null));
+        foreach (var g in groups)
+        {
+            var ordered = g.Select(t => (t.p, Index: int.Parse(t.x.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture)))
+                .OrderBy(t => t.Index).ToList();
+            // two or more pieces, numbered without a gap or a duplicate
+            if (ordered.Count < 2 || ordered.Count > MaxParts) continue;
+            if (ordered.Where((t, i) => t.Index != ordered[0].Index + i).Any()) continue;
+            var first = ordered[0].p.Name;
+            var last = ordered[^1].p.Name;
+            var where = g.Key.Container.Length == 0 ? $"resources '{first}'..'{last}'" : $"elements '{first}'..'{last}' of resource '{g.Key.Container}'";
+
+            if (!g.Key.Text)
+            {
+                long total = ordered.Sum(t => (long)t.p.Bytes!.Length);
+                if (total > MaxCarved) continue;
+                var asc = ordered.SelectMany(t => t.p.Bytes!).ToArray();
+                yield return ($"{where} (joined)", asc);
+                yield return ($"{where} (joined in reverse order)", ordered.AsEnumerable().Reverse().SelectMany(t => t.p.Bytes!).ToArray());
+                yield return ($"{where} (joined, bytes reversed)", asc.Reverse().ToArray());
+                // base64 text kept in binary resources
+                if (asc.Length > 0 && asc.All(b => b is >= (byte)'A' and <= (byte)'Z' or >= (byte)'a' and <= (byte)'z' or >= (byte)'0' and <= (byte)'9'
+                                                    or (byte)'+' or (byte)'/' or (byte)'=' or (byte)'-' or (byte)'_' or (byte)'\r' or (byte)'\n'))
+                    foreach (var c in FromText(where, ordered.Select(t => System.Text.Encoding.ASCII.GetString(t.p.Bytes!)).ToList()))
+                        yield return c;
+            }
+            else if (ordered.Sum(t => (long)t.p.Text!.Length) <= MaxCarved)
+                foreach (var c in FromText(where, ordered.Select(t => t.p.Text!).ToList()))
+                    yield return c;
+        }
+    }
+
+    // Text pieces: base64 of the pieces joined, joined in reverse order, and of the joined text reversed.
+    static IEnumerable<(string Where, byte[] Data)> FromText(string where, List<string> pieces)
+    {
+        var joined = string.Concat(pieces);
+        foreach (var (how, text) in new[]
+                 {
+                     ("joined, base64", joined),
+                     ("joined in reverse order, base64", string.Concat(pieces.AsEnumerable().Reverse())),
+                     ("joined, text reversed, base64", new string(joined.Reverse().ToArray())),
+                 })
+            if (DnSpySql.Functions.DataFunctions.Base64(text) is { Length: > 0 } bytes)
+                yield return ($"{where} ({how})", bytes);
     }
 
     // A PE header at the offset: its machine, whether it is a DLL, and its size on disk (the end of the furthest

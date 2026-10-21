@@ -48,8 +48,17 @@ add_executable(dnspysql
   src/mcp.cpp
   src/http.cpp
 )
-target_include_directories(dnspysql PRIVATE src "${NETHOST_DIR}")
-target_compile_definitions(dnspysql PRIVATE NETHOST_USE_AS_STATIC)
+target_include_directories(dnspysql PRIVATE src "${NETHOST_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_definitions(dnspysql PRIVATE NETHOST_USE_AS_STATIC DNSPYSQL_VERSION="${PROJECT_VERSION}")
+
+# The commit the binary is built from, for --version: regenerated on every build (a configure-time value would go
+# stale after the next commit), rewritten only when it changes.
+add_custom_target(dnspysql_build_info
+  COMMAND "${CMAKE_COMMAND}" -DSRC=${CMAKE_CURRENT_SOURCE_DIR} -DOUT=${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.hpp
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.cmake"
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.hpp"
+  VERBATIM)
+add_dependencies(dnspysql dnspysql_build_info)
 if(WIN32)
   target_link_libraries(dnspysql PRIVATE xsql::xsql "${NETHOST_DIR}/libnethost.lib")
   target_compile_definitions(dnspysql PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -61,7 +70,8 @@ endif()
 
 # --- managed engine -----------------------------------------------------------
 set(ENGINE_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/engine/DnSpySql.Engine/DnSpySql.Engine.csproj")
-file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/engine/DnSpySql.Engine/*.cs")
+file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/engine/DnSpySql.Engine/*.cs"
+  "${CMAKE_CURRENT_SOURCE_DIR}/engine/DnSpySql.Engine/Guides/*.md")
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/(obj|bin)/")
 # The engine is compiled ahead of time (ReadyToRun) for the build platform: every query starts a process, and JIT
 # compiling the table and function registrations is most of the start-up time. Turn it off for offline builds

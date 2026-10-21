@@ -30,12 +30,14 @@ public static class Registry
         ApiDocTables.Register(s);
         ProtectionTables.Register(s);
         TriageTables.Register(s);
+        GuideTables.Register(s);
 
         CoreFunctions.Register(s);
         EditFunctions.Register(s);
         CompileFunctions.Register(s);
         DataFunctions.Register(s);
         DnSpyFunctions.Register(s);
+        TriageFunctions.Register(s);
 
         foreach (var t in s.Db.Tables) t.Sink = s.Ws;
 

@@ -33,7 +33,7 @@ public static class CoreFunctions
         s.Fn("token_of", 1, 1, a => (long)Handle.Token(Values.ToLong(a[0]) ?? 0), "token_of(handle)", "metadata token part of a handle", "core", deterministic: true);
         s.Fn("module_of", 1, 1, a => (long)Handle.Module(ws.Normalize(Values.ToLong(a[0]) ?? 0)), "module_of(handle)", "module id part of a handle", "core");
         s.Fn("hx", 1, 1, a => Values.ToLong(a[0]) is long v ? $"0x{v:X}" : null, "hx(int)", "format an integer as 0x hex", "core", deterministic: true);
-        s.Fn("tok", 1, 1, a => Values.ToLong(a[0]) is long v ? Handle.Hex(v) : null, "tok(handle)", "format a handle as 0xM_TTTTTTTT (or 0xTTTTTTTT)", "core", deterministic: true);
+        s.Fn("tok", 1, 1, a => Values.ToLong(a[0]) is long v ? Handle.Hex(v) : null, "tok(handle)", "format a handle as 0xM_TTTTTTTT (or 0xTTTTTTTT); that text is accepted back wherever a handle is", "core", deterministic: true);
         s.Fn("kind_of", 1, 1, a => Values.ToLong(a[0]) is long v ? Handle.KindOf(Handle.Token(v)) : null, "kind_of(handle)", "entity kind from the token table", "core", deterministic: true);
         s.Fn("name_of", 1, 1, a =>
         {
@@ -41,7 +41,9 @@ public static class CoreFunctions
             try { var (_, it) = ws.Resolve(h); return (it as IFullName)?.FullName ?? it.ToString(); } catch { return null; }
         }, "name_of(handle)", "full name of any entity", "core");
         s.Fn("resolve", 1, 2, a => Resolve(s, Str(a[0], "name"), Values.ToText(a.Arg(1))),
-            "resolve(name [, kind])", "find a handle by full name: 'Ns.Type', 'Ns.Type::Method', 'Ns.Type::field' (first match; kind = type|method|field|property|event)", "core");
+            "resolve(name [, kind])", "find a handle by full name: 'Ns.Type', 'Ns.Outer/Nested', 'Ns.Type::Method', 'Ns.Type::Method(System.String,System.Int32)' " +
+            "(an overload by its parameter types), 'Ns.Type::field', 'Ns.Type::.ctor'. First match, with a note when a method name has several " +
+            "overloads; NULL when nothing matches. kind = type|method|field|property|event", "core");
         s.Fn("def_of", 1, 1, a =>
         {
             if (ws.HandleArg(a[0]) is not long h) return null;
@@ -218,7 +220,15 @@ public static class CoreFunctions
             if (member.Length == 0) { if (kind is null or "type") return lm.H(t); continue; }
             var paren = member.IndexOf('(');
             var mname = paren >= 0 ? member[..paren] : member;
-            if (kind is null or "method" && t.Methods.FirstOrDefault(m => m.Name == mname && (paren < 0 || MemberTables.Signature(m).Contains(member[paren..]) || m.FullName.EndsWith(member))) is { } md) return lm.H(md);
+            if (kind is null or "method")
+            {
+                var overloads = t.Methods.Where(m => m.Name == mname && (paren < 0 || MemberTables.Signature(m).Contains(member[paren..]) || m.FullName.EndsWith(member))).ToList();
+                // the first of several overloads is a guess: say so, since a patch or comment on the wrong one goes unnoticed
+                if (overloads.Count > 1)
+                    s.Notices.Add($"resolve: '{name}' matches {overloads.Count} methods; returned the first, {overloads[0].FullName} " +
+                                  $"(name one with its parameter types: '{typePart}::{mname}({string.Join(",", overloads[1].MethodSig?.Params.Select(p => p.FullName) ?? [])})')");
+                if (overloads.Count > 0) return lm.H(overloads[0]);
+            }
             if (kind is null or "field" && t.Fields.FirstOrDefault(f => f.Name == mname) is { } fd) return lm.H(fd);
             if (kind is null or "property" && t.Properties.FirstOrDefault(p => p.Name == mname) is { } pd) return lm.H(pd);
             if (kind is null or "event" && t.Events.FirstOrDefault(e => e.Name == mname) is { } ed) return lm.H(ed);

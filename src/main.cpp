@@ -262,7 +262,7 @@ struct Shell {
     }
 
     void run(size_t modules) {
-        std::cerr << "dnspysql " << kVersion << " - " << modules << " module(s) loaded. .help for help, .quit to exit\n";
+        std::cerr << "dnspysql " << kVersion << " (" << kCommit << ") - " << modules << " module(s) loaded. .help for help, .quit to exit\n";
         CtrlC ctrl([this] { runner.interrupt(); });
         std::string buffer, line;
         for (;;) {
@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
         try {
             if (a == "-h" || a == "--help" || a == "/?") { std::cout << kUsage; return 0; }
             if (a == "--version") {
-                std::cout << "dnspysql " << kVersion << " (sqlite " << sqlite3_libversion() << ")\n"
+                std::cout << "dnspysql " << kVersion << " (commit " << kCommit << ", sqlite " << sqlite3_libversion() << ")\n"
                           << "Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms (LICENSE, NOTICE); no warranty.\n"
                           << "Built on dnlib, dnSpyEx's decompiler and libxsql by Elias Bachaalany (https://github.com/0xeb/libxsql).\n"
                           << "See THIRD_PARTY_NOTICES.md.\n";
@@ -360,7 +360,7 @@ int main(int argc, char** argv) {
     try {
         engine.start(engine_arg.empty() ? exe_dir() / "engine" : fs::path(engine_arg));
         nlohmann::json opts = {
-            {"sqlite_version", sqlite3_libversion()}, {"version", kVersion}, {"read_only", read_only},
+            {"sqlite_version", sqlite3_libversion()}, {"version", kVersion}, {"commit", kCommit}, {"read_only", read_only},
             {"no_project", no_project || schema_md}, {"timeout_ms", timeout_ms}, {"max_rows", max_rows}, {"ref_paths", refs},
         };
         if (!project.empty()) opts["project"] = project;

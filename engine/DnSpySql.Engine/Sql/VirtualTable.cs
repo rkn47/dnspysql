@@ -296,7 +296,16 @@ public static class Values
     {
         s = s.Trim();
         if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            return long.TryParse(s.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out var h) ? h : null;
+        {
+            var hex = s.AsSpan(2);
+            // 0xM_TTTTTTTT is how tok() prints a handle (module, then the 32-bit token): read it back as one, so a value
+            // copied from output works as input; the token part is a token even when written with fewer digits
+            if (hex.IndexOf('_') is var sep and > 0 && hex[(sep + 1)..].IndexOf('_') < 0)
+                return long.TryParse(hex[..sep], System.Globalization.NumberStyles.HexNumber, null, out var mod) && mod is >= 0 and <= int.MaxValue
+                       && uint.TryParse(hex[(sep + 1)..], System.Globalization.NumberStyles.HexNumber, null, out var tok)
+                    ? (mod << 32) | tok : null;
+            return long.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var h) ? h : null;
+        }
         return long.TryParse(s, out var x) ? x : null;
     }
 

@@ -90,6 +90,7 @@ public static unsafe class Exports
                     foreach (var r in refs.EnumerateArray()) if (r.GetString() is { } p) opts.ReferencePaths.Add(p);
                 Database.SqliteVersion = Opt("sqlite_version") ?? "";
                 if (Opt("version") is { } version) Session.ToolVersion = version;
+                Session.ToolCommit = Opt("commit");
                 session = new Session(opts);
                 DnSpyDecompiler.Outer = () => S.Db.Cancellation;
                 return Wire.EncodeList();

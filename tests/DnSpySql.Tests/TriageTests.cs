@@ -22,6 +22,70 @@ public sealed class TriageTests : SampleTest
     }
 
     [Fact]
+    public void Triage_summarizes_a_module_in_one_json_object()
+    {
+        var r = Run("select triage()", "select value from binary where key = 'sha256'", "select triage(1) = triage()");
+        var t = JsonDocument.Parse(r.Text(0)).RootElement;
+        Assert.Equal(r.Text(1), t.GetProperty("module").GetProperty("sha256").GetString());
+        Assert.Contains(t.GetProperty("entry_points").EnumerateArray(), e => e.GetProperty("name").GetString()!.Contains("Program::Main"));
+        foreach (var key in new[] { "protections", "embedded_pes", "capabilities", "next" })
+            Assert.Equal(JsonValueKind.Array, t.GetProperty(key).ValueKind);
+        // the settings class of the sample is the first config candidate, with its values
+        var config = t.GetProperty("config_candidates");
+        Assert.True(config.GetProperty("total").GetInt32() >= config.GetProperty("shown").GetInt32());
+        Assert.Contains(config.GetProperty("items").EnumerateArray(),
+            c => c.GetProperty("type").GetString() == "Sample.Defaults" && c.GetProperty("field").GetString() == "Title"
+                 && c.GetProperty("value").GetString() == "City Library");
+        Assert.DoesNotContain(config.GetProperty("items").EnumerateArray(), c => c.GetProperty("field").GetString() == "Motto"); // a default store
+        Assert.Contains(t.GetProperty("next").EnumerateArray(), n => n.GetString()!.Contains("decompile(resolve('Sample.Defaults'))"));
+        Assert.Equal(0, t.GetProperty("decrypted").GetProperty("call_sites").GetInt32());
+        Assert.Equal(1, r.Long(2));
+    }
+
+    [Fact]
+    public void Embedded_pes_reassemble_a_payload_split_across_resources()
+    {
+        // the sample's own bytes as the "payload": three binary pieces in order, and base64 text in three pieces numbered backwards
+        var pe = File.ReadAllBytes(Sample);
+        int third = pe.Length / 3;
+        byte[][] bin = [pe[..third], pe[third..(2 * third)], pe[(2 * third)..]];
+        var b64 = Convert.ToBase64String(pe);
+        int t3 = b64.Length / 3;
+        string[] text = [b64[(2 * t3)..], b64[t3..(2 * t3)], b64[..t3]]; // chunk_0 holds the end
+        var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(pe)).ToLowerInvariant();
+        // (two runs: the pieces travel on the command line, which Windows caps at 32K characters)
+        var sql = Enumerable.Range(0, 3).Select(i => $"select add_resource('part{i + 1}', base64_decode('{Convert.ToBase64String(bin[i])}'))").ToList();
+        sql.Add("select location, is_dotnet, sha256 from embedded_pes order by location");
+        sql.Add("select open_bytes(data, 'joined.dll') is not null from embedded_pes where location like 'resources ''part1''%'");
+        var r = Run(sql.ToArray());
+        Assert.Contains(r.Rows(-2), x => x.GetProperty("location").GetString() == "resources 'part1'..'part3' (joined)"
+                                         && x.GetProperty("is_dotnet").GetInt64() == 1 && x.GetProperty("sha256").GetString() == sha);
+        Assert.Equal(1, r.Long(-1));
+
+        sql = Enumerable.Range(0, 3).Select(i => $"select add_resource('chunk_{i}.txt', '{text[i]}')").ToList();
+        sql.Add("select location, sha256 from embedded_pes");
+        Assert.Contains(Run(sql.ToArray()).Rows(), x => x.GetProperty("location").GetString() == "resources 'chunk_0.txt'..'chunk_2.txt' (joined in reverse order, base64)"
+                                                       && x.GetProperty("sha256").GetString() == sha);
+
+        // a gap in the numbering is not one payload
+        var gap = Run($"select add_resource('p1', base64_decode('{Convert.ToBase64String(bin[0])}'))",
+                      $"select add_resource('p3', base64_decode('{Convert.ToBase64String(bin[2])}'))",
+                      "select count(*) from embedded_pes where location like '%''p1''..%'"); // (p1 alone still shows: it starts with the PE headers)
+        Assert.Equal(0, gap.Long());
+    }
+
+    [Fact]
+    public void Guides_are_readable_with_sql()
+    {
+        var r = Run("select topic, title, length(text) as n from dnspysql_guides", "select text from dnspysql_guides where topic = 'basics'",
+                    "select count(*) from dnspysql_guides where topic = 'nope'");
+        Assert.Equal(["basics", "explore", "triage", "unpack", "dnspy"], r.Rows(0).Select(x => x.GetProperty("topic").GetString()));
+        Assert.All(r.Rows(0), x => Assert.True(x.GetProperty("n").GetInt64() > 500));
+        Assert.StartsWith("# dnspysql basics", r.Text(1));
+        Assert.Equal(0, r.Long(2));
+    }
+
+    [Fact]
     public void Field_init_bytes_come_from_the_field_data()
     {
         Assert.Equal("0102030405060708090A0B0C0D0E0F10",

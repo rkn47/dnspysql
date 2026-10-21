@@ -140,7 +140,7 @@ public static class DataFunctions
         return r;
     }
 
-    static byte[]? Base64(string s)
+    internal static byte[]? Base64(string s)
     {
         var sb = new StringBuilder(s.Length + 3);
         foreach (var c in s)

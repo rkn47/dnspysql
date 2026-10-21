@@ -259,6 +259,7 @@ public static class MetaTables
             Add("summary", "no module loaded (use open('path'))", "string");
             Add("tool_name", Session.ToolName, "string");
             Add("tool_version", Session.ToolVersion, "string");
+            Add("tool_commit", Session.ToolCommit, "string");
             return list;
         }
         var md = lm.Module;
@@ -268,6 +269,7 @@ public static class MetaTables
         Add("summary", $"{lm.Name} {md.Assembly?.Version} ({kind}, {TargetFramework(md)}, {md.Machine}{(lm.IsReadyToRun ? ", ReadyToRun" : lm.IsMixedMode ? ", mixed-mode" : "")}), {md.GetTypes().Count()} types, {md.Metadata.TablesStream.MethodTable.Rows} methods", "string");
         Add("tool_name", Session.ToolName, "string");
         Add("tool_version", Session.ToolVersion, "string");
+        Add("tool_commit", Session.ToolCommit, "string");
         Add("processor", "CIL", "string");
         Add("machine", md.Machine.ToString(), "string");
         Add("platform", Platform(md), "string");

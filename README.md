@@ -158,8 +158,9 @@ dnspysql [options] <assembly|module|exe>...
 - **HTTP.** `POST /query` (raw SQL, or JSON `{sql, continue_on_error, include_sql, max_rows}`;
   `?format=json|text|csv|tsv`), `GET /status`, `GET /health`, `GET /schema`, `POST /cancel`,
   `POST /shutdown`.
-- **MCP.** Tools `dnspysql_query` and `dnspysql_schema` (and the older `sql` / `schema`); `ping` and
-  `notifications/cancelled` are answered while a query runs. From Claude Code, either one server for
+- **MCP.** Tools `dnspysql_query`, `dnspysql_schema` and `dnspysql_guide` (and the older `sql` / `schema`); `ping` and
+  `notifications/cancelled` are answered while a query runs. The workflow guides (`dnspysql_guides`: basics, explore,
+  triage, unpack, dnspy) are also offered as MCP prompts, with the assembly to work on as an argument. From Claude Code, either one server for
   every sample (the agent loads them with `SELECT open('path')`) or one per sample:
   `claude mcp add --scope user dnspysql -- /path/to/dnspysql --mcp`, or
   `claude mcp add dnspysql -- /path/to/dnspysql /path/to/target.dll --mcp`; other clients:
@@ -186,6 +187,7 @@ Every table and view, by area. *writes* lists what the table accepts besides `SE
 | `bundle_entries` |  | Files inside a .NET single-file bundle the module was opened from; `open_bundle_entry(path)` loads an embedded assembly |
 | `dnspysql_columns` |  | Catalog of dnspysql columns (tables and views) |
 | `dnspysql_functions` |  | Catalog of dnspysql SQL functions |
+| `dnspysql_guides` |  | How to use dnspysql, one guide per workflow (basics, explore, triage, unpack, dnspy); the MCP server offers them as prompts |
 | `dnspysql_tables` |  | Catalog of dnspysql tables and views |
 | `exported_types` |  | ExportedType rows (type forwarders and multi-module exports) |
 | `files` |  | File table rows (multi-file assembly members) |
@@ -238,10 +240,11 @@ Every table and view, by area. *writes* lists what the table accepts besides `SE
 |---|---|---|
 | `analyze` |  | dnSpy's Analyzer as a table-valued function: every relation of `target`, optionally one `relation` (needs `WHERE target = ...`) |
 | `call_edges` |  | Call graph edges (call, callvirt, newobj, ldftn, ldvirtftn, jmp). dst = 0 when the callee is external |
+| `callers` |  | Who calls a method (`WHERE method = ...`), also through a base or interface method it overrides or implements (`via`) |
+| `dispatch_calls` |  | Virtual calls that can reach a method through a base or interface method it overrides or implements (dnSpy's Virtual Used By) |
 | `string_refs` |  | String literals with their referrers: ldstr in IL, string constants, string attribute arguments (dnSpy StringSearcher) |
 | `xrefs` |  | Every IL reference: calls, field read/write/addr, type and token uses, ldstr. Filter on from_method, to_def or to_name. Bodies that are not IL (encrypted until runtime, see method_bodies) are left out: SELECT untamper() first |
 | `callees` |  | *View.* What a method calls (`WHERE method = ...`); external callees have `callee = 0` |
-| `callers` |  | *View.* Who calls a method (`WHERE method = ...`) |
 | `entry_points` |  | *View.* Managed entry points, module initializers and static constructors of every module |
 | `external_calls` |  | *View.* Calls leaving the loaded modules, grouped by target (imports-like view) |
 | `method_metrics` |  | *View.* Per-method size/complexity/fan-in/fan-out/string counts for triage (hotness_score ranking) |
@@ -254,7 +257,7 @@ Every table and view, by area. *writes* lists what the table accepts besides `SE
 |---|---|---|
 | `capabilities` |  | What the code does, at the call or literal that shows it: injection, persistence, download and execute, keylogging, capture, credential theft and more |
 | `decryptor_calls` |  | Every call of a string decryptor with literal arguments: what it decrypts and where to break |
-| `embedded_pes` |  | PE files inside a module: anywhere in its file bytes (the overlay, uncompressed resources, a section) and in resources or .resources entries, also behind gzip/zlib/deflate. Size from the PE headers; SELECT open_bytes(data, name) FROM embedded_pes WHERE is_dotnet opens the next stage |
+| `embedded_pes` |  | PE files inside a module: in its file bytes (overlay, sections), in resources and `.resources` entries, also compressed or split across numbered resources |
 | `field_inits` |  | Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also computed by a getter or decryptor |
 | `iocs` |  | URLs, webhooks, Telegram tokens, IPs, domains, e-mails, wallets, registry keys and mutex names in literals, base64 literals, decrypted strings and text resources |
 | `protections` |  | Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques, with evidence |
@@ -344,8 +347,13 @@ Every table and view, by area. *writes* lists what the table accepts besides `SE
 Conventions:
 
 - Every entity has a `handle` = `module << 32 | metadata token` (`0x1_06000005`); foreign keys (`method`,
-  `type`, `owner`, ...) hold handles. Bare tokens and `'0x..'` text are accepted everywhere and resolve
-  against the current module (`use_module(id)`). `resolve('Ns.Type::Member')` returns a handle.
+  `type`, `owner`, ...) hold handles. Bare tokens and `'0x..'` text, including `tok()`'s `'0x1_06000005'`, are
+  accepted everywhere; bare tokens resolve against the current module (`use_module(id)`). `resolve('Ns.Type::Member')`
+  returns a handle; an overloaded method is named with its parameter types (`'Ns.Type::Load(System.String)'`), and
+  without them `resolve()` returns the first overload with a note.
+- `callers` also lists the calls that can reach a method through a base or interface method it overrides or
+  implements (`via` = `virtual` or `interface`), since such a call site names that slot; `call_edges` and `xrefs` keep
+  the reference as the IL has it.
 - Tables computed from an argument need that filter and say which: `pseudocode WHERE handle = ...`,
   `search WHERE query = ...`, `md_rows WHERE table_name = ...`. `il`, `locals`, `exception_handlers`,
   `blocks` and `cfg_edges` take a `method` filter but also scan every body.
@@ -366,6 +374,7 @@ Functions, by area (signatures in [docs/SCHEMA.md](docs/SCHEMA.md)):
 | editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |
 | C# compiler | `compile_method`, `add_members`, `add_type`, `edit_type`, `compile_preview` |
 | annotations | `set_comment`, `tag` |
+| triage | `triage` (the first look at a module as one JSON object: protections, payloads, decrypted strings, capabilities, indicators, config candidates, next queries) |
 | breakpoints | `bp_set`, `bp_trace`, `bp_set_line`, `bp_set_decompiled`, `bp_toggle`, `bp_enable`, `bp_clear`, `bp_module`, `break_on_exception`, `bp_patch`, `bp_export` (= `export_dnspy_breakpoints`), `bp_import` (= `import_dnspy_breakpoints`), `dnspy_sync` |
 | data | `regexp`, `regexp_extract`, `regexp_replace`, `base64_decode`, `base64_encode`, `text_decode`, `text_encode`, `xor`, `concat_bytes`, `int_at` (little/big-endian integers in a blob), `emulate` (a static method on literal arguments, interpreted), `decompress` (gzip, zlib, deflate, brotli, LZMA; detects gzip and zlib, also after a 4-byte length), `decrypt` (AES/DES/3DES/RC2/RC4), `aes_decrypt`, `pbkdf2`, `md5`, `sha1`, `sha256`, `entropy`, `image_pixels` (PNG/BMP/ICO pixels, for payloads hidden in images) |
 
@@ -498,11 +507,19 @@ at the IL (or the bytes) that show it, so `decompile()`, `bp_set(method, offset)
 - `embedded_pes`: every PE a module carries: anywhere in its file bytes (the overlay, a section) and in resources or
   `.resources` entries, also behind gzip, zlib or deflate (Costura's compressed references, a loader's payload). The
   size comes from the PE headers, so `SELECT open_bytes(data, 'stage2.dll') FROM embedded_pes WHERE is_dotnet` opens
-  the next stage; a native one has its `machine` and `kind` (open_bytes leaves it out with a note).
+  the next stage; a native one has its `machine` and `kind` (open_bytes leaves it out with a note). A PE stored in
+  pieces across numbered resources or `.resources` entries (`part1`..`part3`, `chunk_00.bin`, ...) is put back
+  together: the pieces joined in order or reversed, as bytes or as base64 text (also reversed), plain or compressed;
+  `location` says which pieces and how they were joined.
 - `decryptor_calls`: every call of a string decryptor (`string_decryptors`, or any method with `WHERE decryptor =`)
   with literal arguments (also a static field holding a constant: `Decode(Config.Host)`), typed in `arg0`..`arg3`, and
   its `plaintext`: computed by interpreting the decryptor's IL
   (`emulation` says why when it cannot be). `emulate(method, args...)` does the same for any static method.
+
+`SELECT triage()` (or `triage(module)`) puts these together as one JSON object, the first look at a sample in one call:
+its identity and anomalies, protections, embedded PEs, string decryptors with the plaintexts of up to 200 call sites,
+capabilities by kind, indicators, config candidates grouped by type, resources, and the queries to run next. Library
+code is left out, and each list says how many entries it had.
 
 The interpreter never runs the sample. It reads IL and computes the result itself; calls into the sample are
 interpreted the same way, including static constructors, struct-based decompressors and lambdas

@@ -29,6 +29,18 @@ public sealed class FrontEndTests : SampleTest
     }
 
     [Fact]
+    public void Version_names_the_commit_the_binary_was_built_from()
+    {
+        var (exit, stdout, _) = Exec("--version");
+        Assert.Equal(0, exit);
+        var m = System.Text.RegularExpressions.Regex.Match(stdout, @"^dnspysql (\d+\.\d+\.\d+) \(commit ([0-9a-f]{7,}(-dirty)?|unknown), sqlite ");
+        Assert.True(m.Success, stdout);
+        var r = Run("select value from binary where key = 'tool_version'", "select value from binary where key = 'tool_commit'");
+        Assert.Equal(m.Groups[1].Value, r.Text(0));
+        Assert.Equal(m.Groups[2].Value, r.Text(1));
+    }
+
+    [Fact]
     public void Output_formats_have_their_documented_shapes()
     {
         const string q = "SELECT 1 AS a, 'x,y' AS b, x'00ff' AS c, NULL AS d UNION ALL SELECT 2, 'z', NULL, 1.5";
@@ -187,6 +199,21 @@ public sealed class FrontEndTests : SampleTest
         Assert.Contains("42", next);
         var schema = Send("""{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"dnspysql_schema","arguments":{"table":"methods"}}}""");
         Assert.Contains("full_name", schema);
+
+        // The workflow guides: as prompts (with the assembly as an argument) and through the dnspysql_guide tool.
+        Assert.True(init.GetProperty("capabilities").TryGetProperty("prompts", out _));
+        var prompts = JsonDocument.Parse(Send("""{"jsonrpc":"2.0","id":7,"method":"prompts/list"}""")).RootElement.GetProperty("result").GetProperty("prompts");
+        Assert.Equal(["basics", "explore", "triage", "unpack", "dnspy"], prompts.EnumerateArray().Select(x => x.GetProperty("name").GetString()));
+        var triage = JsonDocument.Parse(Send("""{"jsonrpc":"2.0","id":8,"method":"prompts/get","params":{"name":"triage","arguments":{"path":"C:/cases/x.exe"}}}"""))
+            .RootElement.GetProperty("result").GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString()!;
+        Assert.StartsWith("Work on this assembly: C:/cases/x.exe", triage);
+        Assert.Contains("# Triage", triage);
+        Assert.Contains("\"code\":-32602", Send("""{"jsonrpc":"2.0","id":9,"method":"prompts/get","params":{"name":"nope"}}"""));
+        Assert.Contains("dnspysql_guide", tools);
+        var basics = JsonDocument.Parse(Send("""{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"dnspysql_guide","arguments":{"topic":"basics"}}}"""))
+            .RootElement.GetProperty("result");
+        Assert.False(basics.GetProperty("isError").GetBoolean());
+        Assert.Contains("resolve(", basics.GetProperty("content")[0].GetProperty("text").GetString());
         p.StandardInput.Close();
         Assert.True(p.WaitForExit(30_000));
     }

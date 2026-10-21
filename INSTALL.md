@@ -179,7 +179,8 @@ args = ["--mcp"]
 In JSON, write Windows paths with forward slashes or doubled backslashes. If .NET is in a non-standard place, add
 `"env": { "DOTNET_ROOT": "<.NET folder>" }` to the server entry.
 
-The server offers `dnspysql_query` (SQL) and `dnspysql_schema`, and its instructions describe the analysis workflow.
+The server offers `dnspysql_query` (SQL), `dnspysql_schema` and `dnspysql_guide` (how-to guides for each workflow,
+also offered as MCP prompts: basics, explore, triage, unpack, dnspy), and its instructions describe the analysis workflow.
 Useful extra arguments, placed before `--mcp`:
 
 - `--dnspy-xml off|auto|PATH`: on Windows, dnspysql keeps dnSpy's settings file in step with the breakpoints and

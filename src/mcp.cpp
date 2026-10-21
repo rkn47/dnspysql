@@ -20,7 +20,9 @@ namespace {
 using json = nlohmann::json;
 
 const char* kQueryDoc =
-    "Run SQL (SQLite dialect) against the loaded .NET assemblies. Tables mirror dnSpy: modules, types, methods, fields, params, "
+    "Run SQL (SQLite dialect) against the loaded .NET assemblies. How-to guides for each workflow: the dnspysql_guide tool "
+    "(or SELECT text FROM dnspysql_guides WHERE topic = 'basics'; topics basics, explore, triage, unpack, dnspy); read basics first. "
+    "Tables mirror dnSpy: modules, types, methods, fields, params, "
     "properties, events, custom_attributes, typerefs, memberrefs, user_strings, resources, resource_elements, il, locals, "
     "exception_handlers, blocks, cfg_edges, xrefs, call_edges, callers, callees, string_refs, analyze (TVF), pseudocode, "
     "pseudocode_lines, pseudocode_refs, baml, search (TVF), jump_entities, pe_*, md_*, file_bytes, byte_search, method_bodies, heap_entries, "
@@ -196,6 +198,38 @@ private:
         return text;
     }
 
+    static std::string quote(const std::string& s) {
+        std::string q = "'";
+        for (char c : s) q += c == '\'' ? std::string("''") : std::string(1, c);
+        return q + "'";
+    }
+
+    // The rows of one statement, for the server's own lookups (the guides); throws its error.
+    std::vector<std::vector<Cell>> rows(const std::string& sql) {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto results = runner_.run(sql, {100000, false});
+        if (results.empty()) return {};
+        if (!results.back().success) throw std::runtime_error(results.back().error);
+        return results.back().rows;
+    }
+
+    // A guide (dnspysql_guides), with the assembly to work on when the client names one.
+    std::string guide_text(const std::string& topic, const std::string& path) {
+        auto r = rows("SELECT text FROM dnspysql_guides WHERE topic = " + quote(topic));
+        if (r.empty() || r[0].empty()) throw std::invalid_argument("no guide '" + topic + "'; the guides are: " + guide_names());
+        std::string text = r[0][0].s;
+        if (!path.empty())
+            text = "Work on this assembly: " + path + "\nLoad it with SELECT open(" + quote(path) + ") (it is only parsed, never run), "
+                   "then follow the guide below.\n\n" + text;
+        return text;
+    }
+
+    std::string guide_names() {
+        std::string names;
+        for (const auto& row : rows("SELECT topic FROM dnspysql_guides")) names += (names.empty() ? "" : ", ") + row[0].s;
+        return names;
+    }
+
     std::optional<json> handle(const json& msg) {
         const json id = msg.value("id", json(nullptr));
         if (!msg.contains("method") || !msg["method"].is_string())
@@ -208,11 +242,32 @@ private:
             for (const char* v : kProtocolVersions)
                 if (asked == v) version = v;
             return result(id, {{"protocolVersion", version},
-                               {"capabilities", {{"tools", {{"listChanged", false}}}}},
+                               {"capabilities", {{"tools", {{"listChanged", false}}}, {"prompts", {{"listChanged", false}}}}},
                                {"serverInfo", {{"name", "dnspysql"}, {"version", kVersion}}},
                                {"instructions", kQueryDoc}});
         }
         if (method.rfind("notifications/", 0) == 0) return std::nullopt;
+        // The workflow guides as prompts: a client offers them to the user (/triage, ...), with the assembly as an argument.
+        if (method == "prompts/list") {
+            json prompts = json::array();
+            for (const auto& row : rows("SELECT topic, title, description FROM dnspysql_guides"))
+                prompts.push_back({{"name", row[0].s}, {"title", row[1].s}, {"description", row[2].s},
+                                   {"arguments", json::array({{{"name", "path"}, {"required", false},
+                                                               {"description", "absolute path of the assembly to work on (optional)"}}})}});
+            return result(id, {{"prompts", prompts}});
+        }
+        if (method == "prompts/get") {
+            const std::string name = p.value("name", "");
+            const json args = p.value("arguments", json::object());
+            std::string path = args.contains("path") && args["path"].is_string() ? args["path"].get<std::string>() : "";
+            try {
+                const std::string text = guide_text(name, path);
+                return result(id, {{"description", "dnspysql guide: " + name},
+                                   {"messages", json::array({{{"role", "user"}, {"content", {{"type", "text"}, {"text", text}}}}})}});
+            } catch (const std::invalid_argument& e) {
+                return error(id, -32602, e.what());
+            }
+        }
         if (method == "tools/list") {
             json query_props = {
                 {"sql", {{"type", "string"}, {"description", "one or more SQL statements"}}},
@@ -221,9 +276,12 @@ private:
                 {"format", {{"type", "string"}, {"enum", {"table", "json", "tsv"}}, {"description", "default table"}}},
             };
             json schema_props = {{"table", {{"type", "string"}, {"description", "table name; omit for the table list"}}}};
+            json guide_props = {{"topic", {{"type", "string"}, {"description", "basics, explore, triage, unpack or dnspy; omit for the list"}}}};
             return result(id, {{"tools", json::array({
                 tool("dnspysql_query", kQueryDoc, query_props, {"sql"}),
                 tool("dnspysql_schema", "Describe tables (all, or one table's columns) and SQL functions", schema_props),
+                tool("dnspysql_guide", "How to use dnspysql for a task: rules, handles, workflows and the queries for them. "
+                     "Read 'basics' first, then the guide for the task (explore, triage, unpack, dnspy)", guide_props),
                 // Names of earlier dnspysql versions.
                 tool("sql", "Run SQL; same as dnspysql_query with a `query` argument and JSON output",
                      {{"query", {{"type", "string"}, {"description", "SQL to run"}}}}, {"query"}),
@@ -257,6 +315,18 @@ private:
                               esc + "' ORDER BY ordinal";
                     }
                     text = query_text(sql, {100000, false}, "table", failed);
+                } else if (name == "dnspysql_guide") {
+                    const std::string topic = args.value("topic", "");
+                    if (topic.empty()) {
+                        text = query_text("SELECT topic, title, description FROM dnspysql_guides", {100, false}, "table", failed);
+                    } else {
+                        try {
+                            text = guide_text(topic, "");
+                        } catch (const std::invalid_argument& e) {
+                            text = std::string("error: ") + e.what();
+                            failed = true;
+                        }
+                    }
                 } else {
                     return error(id, -32602, "unknown tool " + name);
                 }

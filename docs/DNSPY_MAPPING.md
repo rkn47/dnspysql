@@ -85,7 +85,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | `.resources` elements (strings, primitives, byte[], streams, serialized) | `resource_elements` | ✅ |
 | Image / icon / ImageListStreamer preview | `resource_images` (image resources, images in `.resources`, serialized Bitmap/Icon/ImageListStreamer read without deserializing), `image_pixels()` (PNG/BMP/ICO pixels) | ✅ |
 | BAML → XAML | `baml` table (`xaml` column, dnSpy's BAML decompiler) | ✅ |
-| Embedded executables (not in dnSpy) | `embedded_pes` (PE files in the file bytes, resources and `.resources` entries, also behind gzip/zlib/deflate), `open_bytes(data)` for a .NET one; `resources.content_type` | ✅ |
+| Embedded executables (not in dnSpy) | `embedded_pes` (PE files in the file bytes, resources and `.resources` entries, also behind gzip/zlib/deflate or split across numbered resources), `open_bytes(data)` for a .NET one; `resources.content_type` | ✅ |
 
 ### 1.6 Decompiler
 
@@ -117,7 +117,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | Base types (tree folder) | `type.base_types` | ✅ |
 | Method: Uses | `method.uses` | ✅ |
 | Method: Used By (incl. base-method calls, P/Invoke twins) | `method.used_by` | ✅ |
-| Method: Virtual Used By (through a base or interface slot) | `method.virtual_used_by` | ✅ |
+| Method: Virtual Used By (through a base or interface slot) | `method.virtual_used_by`; as rows for any or every method: `dispatch_calls`, and `callers` (`via`) | ✅ |
 | Method: Overrides / Overridden By | `method.overrides`, `method.overridden_by` | ✅ |
 | Interface method: Implemented By | `method.implemented_by` (+ `method.implements`) | ✅ |
 | Field: Read By / Assigned By | `field.read_by`, `field.assigned_by` | ✅ (ldflda counts as both, like dnSpy) |
