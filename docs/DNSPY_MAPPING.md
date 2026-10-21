@@ -85,7 +85,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | `.resources` elements (strings, primitives, byte[], streams, serialized) | `resource_elements` | ✅ |
 | Image / icon / ImageListStreamer preview | `resource_images` (image resources, images in `.resources`, serialized Bitmap/Icon/ImageListStreamer read without deserializing), `image_pixels()` (PNG/BMP/ICO pixels) | ✅ |
 | BAML → XAML | `baml` table (`xaml` column, dnSpy's BAML decompiler) | ✅ |
-| Embedded executables (not in dnSpy) | `embedded_pes` (PE files in the file bytes, resources and `.resources` entries, also behind gzip/zlib/deflate or split across numbered resources), `open_bytes(data)` for a .NET one; `resources.content_type` | ✅ |
+| Embedded executables (not in dnSpy) | `embedded_pes` (PE files in the file bytes, resources and `.resources` entries, also behind gzip/zlib/deflate or split across numbered resources), `open_bytes(data)` for a .NET one (one module per payload; `modules.origin`, `derived_from`); a PE inside another carve names it (`parent_offset`); `resources.content_type` | ✅ |
 
 ### 1.6 Decompiler
 
@@ -228,6 +228,7 @@ any debugger stops there.
 | max stack / init locals | `UPDATE methods SET max_stack, init_locals` | ✅ |
 | Copy/paste instructions between methods | — (re-insert via `il_insert`) | ❌ |
 | Replace all ldstr | `replace_string(old, new)` | ✅ |
+| Decrypted strings in the code (not in dnSpy; what de4dot is run for before opening a sample in it) | `inline_strings([module [, decryptor]])`: each call site `decryptor_calls` interprets to a string becomes `ldstr`, undoable; `save()` then hands dnSpy a readable copy | ✅ |
 
 ### 2.5 C# compiler (Roslyn)
 

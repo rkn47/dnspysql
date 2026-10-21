@@ -36,6 +36,8 @@ public static class TriageFunctions
         {
             ["id"] = m.Id,
             ["file"] = m.Path,
+            ["origin"] = m.Origin,
+            ["derived_from"] = m.DerivedFrom,
             ["assembly"] = md.Assembly?.FullName,
             ["kind"] = md.Kind.ToString(),
             ["target_framework"] = MetaTables.TargetFramework(md),
@@ -56,8 +58,12 @@ public static class TriageFunctions
             ["name"] = f.Name, ["kind"] = f.Kind, ["confidence"] = f.Confidence, ["evidence"] = f.Evidence,
             ["handle"] = f.Handle,
         }));
-        if (protections.Any(f => f.Kind == "anti-tamper"))
-            next.Add("SELECT untamper()  -- anti-tamper: method bodies are encrypted in the file; analyze the module it returns");
+        // only when untamper() would do something: bodies that do not decode, and the routine it interprets (one with the
+        // VirtualProtect import and plain bodies has nothing to decrypt; in a module untamper() made, the routine would
+        // decrypt the decrypted bodies again)
+        if (protections.Any(f => f.Kind == "anti-tamper") && m.Origin != "untamper" && HexTables.Undecodable(m).Count > 0
+            && CoreFunctions.AntiTamperInitializer(s, m) != null)
+            next.Add($"SELECT untamper({m.Id})  -- anti-tamper: method bodies are encrypted in the file; analyze the module it returns");
 
         var carved = ProtectionTables.Carve(m).ToList();
         o["embedded_pes"] = Array(carved.Select(c =>
@@ -69,10 +75,12 @@ public static class TriageFunctions
                 ["location"] = c.Location, ["size"] = c.Size, ["is_dotnet"] = dotnet,
                 ["machine"] = Enum.GetName(typeof(dnlib.PE.Machine), c.Machine) ?? $"0x{c.Machine:X}",
                 ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+                ["parent_offset"] = c.Parent,
             };
         }));
         if (o["embedded_pes"]!.AsArray().Any(x => x!["is_dotnet"]!.GetValue<bool>()))
-            next.Add($"SELECT open_bytes(data, 'stage2.dll') FROM embedded_pes WHERE module = {m.Id} AND is_dotnet  -- then triage the new module");
+            // no name: each stage gets one from its hash (a fixed name fails on the second row)
+            next.Add($"SELECT open_bytes(data) AS module FROM embedded_pes WHERE module = {m.Id} AND is_dotnet  -- then triage each new module");
 
         var decryptors = ProtectionTables.Decryptors(s, m, 5).Where(d => !TriageTables.IsLibrary(d.Method)).OrderByDescending(d => d.Score).ToList();
         o["string_decryptors"] = Counted(decryptors.Count, decryptors.Take(5).Select(d => (JsonNode?)new JsonObject
@@ -126,7 +134,9 @@ public static class TriageFunctions
         {
             ["type"] = f.Field.DeclaringType!.FullName, ["field"] = f.Field.Name.String, ["kind"] = f.Kind, ["value"] = Value(f.Value), ["source"] = f.Source,
         }));
-        if (byType.Count > 0) next.Add($"SELECT decompile(resolve({Quote(byType[0].Key)}))  -- the type with the most stored constants");
+        // by handle: a name can be in several open modules (an untamper() copy has all of them), and obfuscated ones are unreadable
+        if (byType.Count > 0)
+            next.Add($"SELECT decompile('{Handle.Hex(m.H(byType[0].First().Field.DeclaringType))}')  -- {OneLine(byType[0].Key)}: the type with the most stored constants");
 
         var resources = md.Resources.OfType<EmbeddedResource>().ToList();
         o["resources"] = Counted(resources.Count, resources.Take(MaxShown).Select(r =>
@@ -137,7 +147,7 @@ public static class TriageFunctions
         foreach (var r in o["resources"]!["items"]!.AsArray())
             if (r!["content_type"]!.GetValue<string>() is "high entropy" or "gzip" or "zlib" or "deflate")
             {
-                next.Add($"resource {Quote(r["name"]!.GetValue<string>())} is {r["content_type"]}: find its loader and decode it (SELECT text FROM dnspysql_guides WHERE topic = 'unpack')");
+                next.Add($"resource {Quote(OneLine(r["name"]!.GetValue<string>()))} is {r["content_type"]}: find its loader and decode it (SELECT text FROM dnspysql_guides WHERE topic = 'unpack')");
                 break;
             }
 
@@ -173,4 +183,9 @@ public static class TriageFunctions
     static bool IsDefault(object? v) => v is null or 0L or 0 or false or "" || v is double d && d == 0;
 
     static string Quote(string s) => "'" + s.Replace("'", "''") + "'";
+
+    // A name the sample chose, inside a suggested query: on one line, or a line break would end the -- comment and
+    // what follows (the sample author's SQL) would run as a statement of its own.
+    static readonly System.Text.RegularExpressions.Regex LineBreaks = new(@"[\x00-\x1F\x7F\u0085  ]");
+    static string OneLine(string s) => LineBreaks.Replace(Output.Visible(s), m => $"\\u{(int)m.Value[0]:X4}");
 }

@@ -1,9 +1,12 @@
 // dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 #include "query.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 
@@ -155,6 +158,70 @@ std::string join(const std::vector<std::string>& parts, const std::string& sep) 
     return out;
 }
 
+std::string lower(std::string s) {
+    for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return s;
+}
+
+size_t edit_distance(const std::string& a, const std::string& b) {
+    std::vector<size_t> row(b.size() + 1);
+    for (size_t j = 0; j <= b.size(); j++) row[j] = j;
+    for (size_t i = 1; i <= a.size(); i++) {
+        size_t diag = row[0];
+        row[0] = i;
+        for (size_t j = 1; j <= b.size(); j++) {
+            const size_t up = row[j];
+            row[j] = std::min({row[j] + 1, row[j - 1] + 1, diag + (a[i - 1] == b[j - 1] ? 0 : 1)});
+            diag = up;
+        }
+    }
+    return row[b.size()];
+}
+
+// SQLite's "no such column: x" names neither the table nor what it does have, and column names are what agents guess
+// most: the tables the statement reads (FROM, JOIN, comma lists) are asked for their columns, and the close ones named.
+std::string column_hint(xsql::Database& db, const std::string& sql, const std::string& error) {
+    static const std::string kPrefix = "no such column: ";
+    if (error.rfind(kPrefix, 0) != 0) return error;
+    std::string wanted = error.substr(kPrefix.size());
+    if (auto dot = wanted.rfind('.'); dot != std::string::npos) wanted = wanted.substr(dot + 1);
+    wanted = lower(wanted);
+
+    std::vector<std::string> tables;
+    static const std::regex kSource(R"((?:\bfrom|\bjoin|,)\s+([A-Za-z_][A-Za-z0-9_]*))", std::regex::icase);
+    for (std::sregex_iterator it(sql.begin(), sql.end(), kSource), end; it != end; ++it) {
+        auto t = lower((*it)[1].str());
+        if (std::find(tables.begin(), tables.end(), t) == tables.end()) tables.push_back(t);
+    }
+    std::vector<std::string> hints;
+    for (const auto& t : tables) {
+        auto st = db.prepare_statement("SELECT name FROM pragma_table_info('" + t + "')");
+        if (!st.valid()) continue;
+        std::vector<std::pair<size_t, std::string>> close;
+        std::vector<std::string> all;
+        while (st.step() == xsql::StepResult::row) {
+            auto name = st.text(0);
+            auto l = lower(name);
+            const size_t d = edit_distance(wanted, l);
+            if (d <= std::max<size_t>(2, wanted.size() / 3) || (wanted.size() >= 3 && l.find(wanted) != std::string::npos) ||
+                (l.size() >= 3 && wanted.find(l) != std::string::npos))
+                close.emplace_back(d, name);
+            all.push_back(std::move(name));
+        }
+        if (all.empty()) continue;  // a CTE, an alias or a subquery's name, not a table
+        std::stable_sort(close.begin(), close.end(), [](auto& x, auto& y) { return x.first < y.first; });
+        std::vector<std::string> names;
+        for (size_t i = 0; i < close.size() && i < 5; i++) names.push_back(close[i].second);
+        if (!names.empty())
+            hints.push_back(t + " has " + join(names, ", "));
+        else {
+            if (all.size() > 30) all.resize(30), all.push_back("...");
+            hints.push_back(t + " columns: " + join(all, ", "));
+        }
+    }
+    return hints.empty() ? error : error + " (" + join(hints, "; ") + ")";
+}
+
 // The connection libxsql opened (see capture_sqlite_connection). The latest one wins: Database::open() closes the
 // connection it replaces, so keeping the first would leave a dangling pointer.
 std::atomic<sqlite3*> g_connection{nullptr};
@@ -228,6 +295,7 @@ std::vector<StatementOutput> Runner::run(const std::string& script, const RunOpt
             if (!st.valid()) {
                 r.success = false;
                 r.error = !st.error().empty() ? st.error() : !db_.last_error().empty() ? db_.last_error() : "failed to prepare statement";
+                r.error = column_hint(db_, r.sql, r.error);
             } else {
                 const int ncols = st.column_count();
                 for (int c = 0; c < ncols; c++) r.columns.push_back(st.column_name(c));

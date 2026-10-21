@@ -350,7 +350,10 @@ Conventions:
   `type`, `owner`, ...) hold handles. Bare tokens and `'0x..'` text, including `tok()`'s `'0x1_06000005'`, are
   accepted everywhere; bare tokens resolve against the current module (`use_module(id)`). `resolve('Ns.Type::Member')`
   returns a handle; an overloaded method is named with its parameter types (`'Ns.Type::Load(System.String)'`), and
-  without them `resolve()` returns the first overload with a note.
+  without them `resolve()` returns the first overload with a note. It searches the current module first; a name in
+  several modules (an `untamper()` copy, a stage opened twice) gets a note, and `resolve(name, kind, module)` picks one.
+- `modules.origin` says how a module was opened (`file`, `bundle`, `bytes`, `untamper`) and `derived_from` which
+  module it came out of.
 - `callers` also lists the calls that can reach a method through a base or interface method it overrides or
   implements (`via` = `virtual` or `interface`), since such a call site names that slot; `call_edges` and `xrefs` keep
   the reference as the IL has it.
@@ -368,10 +371,10 @@ Functions, by area (signatures in [docs/SCHEMA.md](docs/SCHEMA.md)):
 | area | functions |
 |---|---|
 | handles and names | `resolve`, `handle`, `token_of`, `module_of`, `kind_of`, `name_of`, `def_of`, `tok`, `hx`, `token_name`, `use_module` |
-| session | `open`, `open_bytes` (a decoded payload as a module; a native PE gives NULL and a note), `open_bundle_entry` (an assembly inside a single-file bundle), `untamper` (anti-tampered bodies, decrypted statically), `save`, `save_raw`, `save_project`, `undo`, `redo`, `is_dirty`, `set_setting` |
+| session | `open`, `open_bytes` (a decoded payload as a module, named from its hash; bytes already open return that module; a native PE gives NULL and a note), `open_bundle_entry` (an assembly inside a single-file bundle), `untamper` (anti-tampered bodies, decrypted statically), `save`, `save_raw`, `save_project`, `undo`, `redo`, `is_dirty`, `set_setting` |
 | decompiler | `decompile`, `il_text`, `decompile_module`, `export_project`, `api_doc` (dnSpy's tooltip text) |
 | raw bytes | `read_bytes`, `patch_bytes`, `method_bytes`, `rva_to_offset`, `offset_to_rva` |
-| editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |
+| editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `inline_strings` (decrypted strings into the code), `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |
 | C# compiler | `compile_method`, `add_members`, `add_type`, `edit_type`, `compile_preview` |
 | annotations | `set_comment`, `tag` |
 | triage | `triage` (the first look at a module as one JSON object: protections, payloads, decrypted strings, capabilities, indicators, config candidates, next queries) |
@@ -506,8 +509,8 @@ at the IL (or the bytes) that show it, so `decompile()`, `bp_set(method, offset)
   settings field or a decryptor (`source = 'computed'`). `is_library` marks hits in well-known library code.
 - `embedded_pes`: every PE a module carries: anywhere in its file bytes (the overlay, a section) and in resources or
   `.resources` entries, also behind gzip, zlib or deflate (Costura's compressed references, a loader's payload). The
-  size comes from the PE headers, so `SELECT open_bytes(data, 'stage2.dll') FROM embedded_pes WHERE is_dotnet` opens
-  the next stage; a native one has its `machine` and `kind` (open_bytes leaves it out with a note). A PE stored in
+  size comes from the PE headers, so `SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet` opens each next
+  stage, named from its hash; a native one has its `machine` and `kind` (open_bytes leaves it out with a note). A PE stored in
   pieces across numbered resources or `.resources` entries (`part1`..`part3`, `chunk_00.bin`, ...) is put back
   together: the pieces joined in order or reversed, as bytes or as base64 text (also reversed), plain or compressed;
   `location` says which pieces and how they were joined.
@@ -572,11 +575,21 @@ the result as a new module, on which everything works, string decryption include
 SELECT untamper();                                         -- returns the new module's id, say 2
 SELECT plaintext FROM decryptor_calls WHERE module = 2 AND emulation = 'ok';
 SELECT kind, value FROM iocs WHERE module = 2 AND NOT is_library;
+SELECT inline_strings(2);                                  -- the plaintexts as ldstr in the code (undoable)
+SELECT save(2, 'C:/work/sample.untampered.exe');           -- a readable copy for dnSpy
 ```
 
 It decrypts 33 of the 37 anti-tampered samples in that corpus, typically in about 3 seconds; the others use a different
 scheme or stop the interpreter, and say why. A module whose bodies all decode is refused (nothing to untamper) unless
-the initializer is passed, and when bodies still do not decode afterwards a note says how many.
+the initializer is passed, and when bodies still do not decode afterwards a note says how many. The copy is marked
+(`modules.origin = 'untamper'`, `derived_from`), so `protections` and `triage()` on it do not suggest `untamper()`
+again, and the interpreter does not run the decryption routine a second time when the copy's static constructor
+calls it.
+
+`inline_strings([module [, decryptor]])` replaces every call site that `decryptor_calls` interprets to a string with
+`ldstr` of the plaintext; its literal arguments become nops. A site that code jumps into (flattened control flow,
+where other paths pass other arguments) is left as it is, with a note. It is one undoable step, and the decompiled
+code and a saved copy then show the strings.
 
 Some tables read the file's own bytes, the way dnSpy's hex view does, so packing, encryption and stego show up
 even where the decompiler only sees garbage:
@@ -607,7 +620,9 @@ from types;
 ```
 
 `decompile_module` is assembled type by type, so one unreadable type costs only its own body: it is
-annotated in place and the output ends with a count of what failed. A token of the wrong kind is
+annotated in place and the output ends with a count of what was incomplete. Types come from the same per-session
+cache as `decompile()`, and under a statement timeout it stops between types with a note rather than losing
+everything: running it again goes on from where it stopped. A token of the wrong kind is
 still a hard error, since that is a query bug rather than a damaged assembly.
 
 Within a type, one bad method costs only itself. The ILSpy v2-era engine can loop forever on some

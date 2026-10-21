@@ -22,7 +22,9 @@ else()
   set(_rid linux-x64)
 endif()
 find_program(DOTNET_EXE dotnet
-  HINTS "$ENV{DOTNET_ROOT}" "$ENV{ProgramFiles}/dotnet" "$ENV{HOME}/.dotnet" /usr/share/dotnet /usr/lib/dotnet
+  # the per-user installs the runtime host finds too (dotnet-install.ps1, Visual Studio's per-user SDK)
+  HINTS "$ENV{DOTNET_ROOT}" "$ENV{ProgramFiles}/dotnet" "$ENV{HOME}/.dotnet" "$ENV{USERPROFILE}/.dotnet"
+        "$ENV{LOCALAPPDATA}/Microsoft/dotnet" /usr/share/dotnet /usr/lib/dotnet
   REQUIRED)
 get_filename_component(_dotnet_root "${DOTNET_EXE}" DIRECTORY)
 # Prefer the portable RID; distro-packaged SDKs (e.g. Ubuntu's dotnet-sdk-8.0) ship the pack

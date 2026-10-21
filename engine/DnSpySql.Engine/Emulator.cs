@@ -326,9 +326,27 @@ public sealed class Emulator
         finally { _depth = outer; }
     }
 
+    // The startup routines untamper() already applied: in its copy they would decrypt the decrypted bodies (and whatever
+    // else they rewrite) a second time, so a call to one does nothing. Kept per module count: modules are only added.
+    HashSet<MethodDef>? _applied;
+    int _appliedFor = -1;
+
+    bool Applied(MethodDef m)
+    {
+        var mods = _s.Ws.Modules;
+        if (_appliedFor != mods.Count)
+        {
+            _applied = mods.Where(x => x.UntamperedBy != null).Select(x => x.Module.ResolveToken(x.UntamperedBy!.Value) as MethodDef)
+                .OfType<MethodDef>().ToHashSet();
+            _appliedFor = mods.Count;
+        }
+        return _applied!.Count > 0 && _applied.Contains(m);
+    }
+
     object? InvokeFrame(MethodDef m, object?[] args, IList<TypeSig>? genericArgs, int depth)
     {
         if (depth > MaxDepth) throw new Failed("call depth exceeded");
+        if (!_untampering && m.IsStatic && args.Length == 0 && Applied(m)) return null;
         if (args.Length != m.Parameters.Count)
             throw new Failed($"{m.Name} called with {args.Length} argument(s) for {m.Parameters.Count} parameter(s)");
         if (m.Module is { } mod && _modulesStarted.Add(mod) && mod.GlobalType is { } global && global != m.DeclaringType)

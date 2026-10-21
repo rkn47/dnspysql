@@ -329,6 +329,12 @@ public sealed class DnSpyTableTests : SampleTest
         var doc = r.Rows(1).Single();
         Assert.Equal("M:System.String.StartsWith(System.String)", doc.GetProperty("doc_id").GetString());
         Assert.Contains("value:", doc.GetProperty("params").GetString());
+        // an accessor has the documentation of its property (an indexer keeps its parameters), an event's of its event
+        var acc = Run("select api_doc('M:System.Exception.get_Message')", "select api_doc('M:System.Collections.Generic.List`1.get_Item(System.Int32)')",
+                      "select api_doc('M:Nope.Missing.get_Thing')");
+        Assert.Contains("message", acc.Text(0));
+        Assert.Contains("index", acc.Text(1));
+        Assert.Equal(JsonValueKind.Null, acc.Scalar(2).ValueKind);
     }
 
     // ---- dnSpy.xml ---------------------------------------------------------------------------------------------------

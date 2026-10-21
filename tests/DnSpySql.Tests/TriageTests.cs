@@ -37,7 +37,7 @@ public sealed class TriageTests : SampleTest
             c => c.GetProperty("type").GetString() == "Sample.Defaults" && c.GetProperty("field").GetString() == "Title"
                  && c.GetProperty("value").GetString() == "City Library");
         Assert.DoesNotContain(config.GetProperty("items").EnumerateArray(), c => c.GetProperty("field").GetString() == "Motto"); // a default store
-        Assert.Contains(t.GetProperty("next").EnumerateArray(), n => n.GetString()!.Contains("decompile(resolve('Sample.Defaults'))"));
+        Assert.Contains(t.GetProperty("next").EnumerateArray(), n => n.GetString()!.Contains("-- Sample.Defaults: the type with the most stored constants"));
         Assert.Equal(0, t.GetProperty("decrypted").GetProperty("call_sites").GetInt32());
         Assert.Equal(1, r.Long(2));
     }
@@ -134,7 +134,10 @@ public sealed class TriageTests : SampleTest
         var row = live.Rows("select location, size, is_dotnet, kind from embedded_pes where location like '%copy.dll%'").Single();
         Assert.Equal(bytes.Length, Convert.ToInt64(row[1]));
         Assert.Equal(1L, Convert.ToInt64(row[2]));
-        Assert.True(Convert.ToInt64(live.Scalar("select open_bytes(data, 'carved.dll') from embedded_pes where location like '%copy.dll%'")) >= 2);
+        // the sample's own bytes: module 1 was edited (the resource added), so they open as a pristine copy of it; once
+        // open, the same bytes again are that module
+        Assert.Equal(2L, Convert.ToInt64(live.Scalar("select open_bytes(data, 'carved.dll') from embedded_pes where location like '%copy.dll%'")));
+        Assert.Equal(2L, Convert.ToInt64(live.Scalar("select open_bytes(data, 'again.dll') from embedded_pes where module = 1 and location like '%copy.dll%'")));
     }
 
     [Fact]

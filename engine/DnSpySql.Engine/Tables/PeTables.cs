@@ -355,7 +355,9 @@ public static class PeTables
         int hidden = names.Count(n => Output.Visible(n) != n);
         if (hidden > 0) list.Add($"{hidden} type/method/field names contain invisible, bidi or private-use characters (name obfuscation)");
         if (md.GlobalType?.Methods.Any(x => x.ImplMap?.Name.String is "VirtualProtect") == true)
-            list.Add("<Module> P/Invokes VirtualProtect (anti-tamper: method bodies decrypted in place at startup)");
+            list.Add(m.Origin == "untamper" ? $"<Module> P/Invokes VirtualProtect (anti-tamper code, already applied: this is the decrypted copy of module {m.DerivedFrom})"
+                : HexTables.Undecodable(m).Count == 0 ? "<Module> P/Invokes VirtualProtect (anti-tamper code, but every method body decodes as IL: nothing is encrypted in the file)"
+                : "<Module> P/Invokes VirtualProtect (anti-tamper: method bodies decrypted in place at startup)");
         if (Overlay.Analyze(m.DiskBytes)?.Anomaly is string ov) list.Add(ov);
         return list;
     }

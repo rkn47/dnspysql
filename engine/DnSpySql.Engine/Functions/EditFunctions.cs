@@ -141,6 +141,14 @@ public static class EditFunctions
             return n;
         }, "replace_string(old, new [, module])", "rewrite every ldstr equal to old; returns the number changed", "edit", mutates: true);
 
+        s.Fn("inline_strings", 0, 2, a => InlineStrings(s, ws.ModuleArg(a.Arg(0)), ws.HandleArg(a.Arg(1))),
+            "inline_strings([module [, decryptor]])",
+            "replace every string decryptor call that decryptor_calls interprets (emulation = 'ok', a string; library decryptors left " +
+            "out) with ldstr of its plaintext, so decompile() and a save() for dnSpy show the strings; the literal arguments become " +
+            "nops; a site code jumps into is left, with a note. decryptor = a method handle takes that method only. One undoable step; " +
+            "returns the number of call sites replaced",
+            "edit", mutates: true);
+
         // ---- namespaces (dnSpy Namespace commands) ----
         s.Fn("rename_namespace", 2, 3, a =>
         {
@@ -221,6 +229,88 @@ public static class EditFunctions
             ws.Touch(lm);
             return p.MDToken.Rid != 0 ? lm.H(p) : null;
         }, "import_member(target_module, handle)", "create a TypeRef/MemberRef in target_module for an entity of another module; returns the new handle", "edit", mutates: true);
+    }
+
+    // What decryptor_calls computed, put where the code asks for it: each call site that interprets to a string becomes
+    // ldstr. Driven by the interpreter and the call shape only, so it is the same for every protector.
+    static long InlineStrings(Session s, LoadedModule lm, long? decryptor)
+    {
+        var sites = new List<(MethodDef Caller, Instruction Call, int Args, string Text)>();
+        int skipped = 0;
+        // every plaintext first: the first edit starts the interpreter afresh
+        foreach (var c in ProtectionTables.Calls(s, lm, decryptor, 5).Where(c => decryptor != null || !TriageTables.IsLibrary(c.Decryptor)).ToList())
+        {
+            var (value, status) = c.Plain.Value;
+            var ins = c.Site.From.Body?.Instructions;
+            if (status != "ok" || value is not string text || !ReturnsString(c) || ins == null || c.Site.Index >= ins.Count
+                || !ReferenceEquals(ins[c.Site.Index].Operand, c.Site.Operand)) { skipped++; continue; }
+            sites.Add((c.Site.From, ins[c.Site.Index], c.Args.Count, text));
+        }
+        long done = 0;
+        int shared = 0;
+        foreach (var g in sites.GroupBy(x => x.Caller))
+        {
+            var targets = Targets(g.Key.Body);
+            var clean = g.Where(x => Clean(g.Key.Body, x.Call, x.Args, targets) is not null).ToList();
+            shared += g.Count() - clean.Count;
+            if (clean.Count == 0) continue;
+            BodyEditor.Edit(s, g.Key, "inline_strings", b =>
+            {
+                foreach (var (_, call, n, text) in clean)
+                {
+                    foreach (var x in Clean(b, call, n, targets)!) { x.OpCode = OpCodes.Nop; x.Operand = null; }
+                    call.OpCode = OpCodes.Ldstr; call.Operand = text;
+                    done++;
+                }
+            });
+        }
+        if (skipped > 0)
+            s.Notices.Add($"inline_strings: {skipped} call site(s) left as they are (not interpreted, or not a string: see decryptor_calls.emulation)");
+        if (shared > 0)
+            s.Notices.Add($"inline_strings: {shared} call site(s) left as they are: code jumps into their arguments, so other paths pass other " +
+                          "values (flattened control flow); their plaintexts are in decryptor_calls");
+        return done;
+    }
+
+    // a string where the code expects one: string, object, or a generic T the call site instantiates with string
+    static bool ReturnsString(ProtectionTables.DecryptorCall c) => c.Decryptor.MethodSig?.RetType?.ElementType switch
+    {
+        ElementType.String or ElementType.Object => true,
+        ElementType.MVar => c.Site.Operand is MethodSpec { GenericInstMethodSig.GenericArguments: [{ ElementType: ElementType.String }] },
+        _ => false,
+    };
+
+    // instructions something jumps to, or a handler starts or ends at
+    static HashSet<Instruction> Targets(CilBody b)
+    {
+        var set = new HashSet<Instruction>();
+        foreach (var i in b.Instructions)
+            if (i.Operand is Instruction t) set.Add(t);
+            else if (i.Operand is Instruction[] ts) set.UnionWith(ts);
+        foreach (var eh in b.ExceptionHandlers)
+            foreach (var x in new[] { eh.TryStart, eh.TryEnd, eh.HandlerStart, eh.HandlerEnd, eh.FilterStart })
+                if (x != null) set.Add(x);
+        return set;
+    }
+
+    // The argument pushes of a call, found the way decryptor_calls found them (over nops and a branch to the next
+    // instruction), when the call and its arguments are one straight sequence; null when code jumps into it (past its
+    // first push), since another path then arrives with other values, or a prefix (volatile.) stands in front of it.
+    static List<Instruction>? Clean(CilBody b, Instruction call, int n, HashSet<Instruction> targets)
+    {
+        var ins = b.Instructions;
+        int at = ins.IndexOf(call);
+        if (at < 0 || targets.Contains(call)) return null;
+        var args = new List<Instruction>();
+        int i = at - 1;
+        for (; args.Count < n && i >= 0; i--)
+        {
+            bool filler = ins[i].OpCode.Code == Code.Nop || ins[i].OpCode.Code is Code.Br or Code.Br_S && ReferenceEquals(ins[i].Operand, ins[i + 1]);
+            if (!filler) args.Add(ins[i]);
+            if (args.Count < n && targets.Contains(ins[i])) return null; // a jump lands after the first push
+        }
+        if (args.Count < n || i >= 0 && ins[i].OpCode.OpCodeType == OpCodeType.Prefix) return null;
+        return args;
     }
 
     static Instruction Ins(CilBody b, int i) =>

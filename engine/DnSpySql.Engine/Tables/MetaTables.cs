@@ -71,7 +71,10 @@ public static class MetaTables
             .Text("dnspy_target", m => DnSpySettings.DnSpyTarget(s, m),
                 doc: "file path dnSpy exports name for this module (the last save() of it, else where it was loaded from); dnSpy binds breakpoints by this path")
             .Text("dnspy_assembly_full_name", m => m.Module.Assembly?.FullName ?? "",
-                doc: "assembly name dnSpy matches breakpoints and bookmarks against (with dnspy_target)");
+                doc: "assembly name dnSpy matches breakpoints and bookmarks against (with dnspy_target)")
+            .Text("origin", m => m.Origin, doc: "file | bundle (an entry of a single-file app) | bytes (open_bytes) | untamper (the decrypted copy untamper() made)")
+            .Int("derived_from", m => m.DerivedFrom,
+                doc: "the module this one came out of: the one untamper() decrypted, or the module whose file holds these bytes as they are (a carved stage); NULL otherwise");
         db.Register(modules);
 
         // ---- assemblies ----

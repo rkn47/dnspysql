@@ -80,7 +80,9 @@ public static class ApiDocTables
 
     static T? Try<T>(Func<T?> f) where T : class { try { return f(); } catch (Exception) { return null; } }
 
-    static (string xml, string source)? Find(string id, ModuleDef? module)
+    static (string xml, string source)? Find(string id, ModuleDef? module) => FindId(id, module) ?? (Accessor(id) is { } owner ? FindId(owner, module) : null);
+
+    static (string xml, string source)? FindId(string id, ModuleDef? module)
     {
         if (module != null && !string.IsNullOrEmpty(module.Location))
         {
@@ -91,6 +93,41 @@ public static class ApiDocTables
         foreach (var (file, provider) in PacksFor(id))
             if (provider.GetDocumentation(id) is { Length: > 0 } x) return (x, file);
         return null;
+    }
+
+    // Accessors have no documentation of their own: what the compiler calls get_Message is documented as the property
+    // (P:System.Exception.Message; an indexer keeps its parameters, a setter drops its value), add_/remove_ as the event.
+    internal static string? Accessor(string id)
+    {
+        if (!id.StartsWith("M:", StringComparison.Ordinal)) return null;
+        var paren = id.IndexOf('(');
+        var head = paren < 0 ? id[2..] : id[2..paren];
+        var dot = head.LastIndexOf('.');
+        if (dot < 0) return null;
+        var (type, name) = (head[..dot], head[(dot + 1)..]);
+        List<string> args = paren < 0 || !id.EndsWith(')') ? [] : SplitParams(id[(paren + 1)..^1]);
+        string Owner(string kind, string member, List<string> ps) => $"{kind}:{type}.{member}{(ps.Count > 0 ? "(" + string.Join(",", ps) + ")" : "")}";
+        if (name.StartsWith("get_", StringComparison.Ordinal)) return Owner("P", name[4..], args);
+        if (name.StartsWith("set_", StringComparison.Ordinal) && args.Count > 0) return Owner("P", name[4..], args.GetRange(0, args.Count - 1));
+        if (name.StartsWith("add_", StringComparison.Ordinal)) return Owner("E", name[4..], []);
+        if (name.StartsWith("remove_", StringComparison.Ordinal)) return Owner("E", name[7..], []);
+        return null;
+    }
+
+    // parameter types at the top level only: System.Collections.Generic.Dictionary{System.String,System.Int32} is one
+    static List<string> SplitParams(string s)
+    {
+        var list = new List<string>();
+        int depth = 0, start = 0;
+        for (int i = 0; i < s.Length; i++)
+            switch (s[i])
+            {
+                case '{' or '[' or '(': depth++; break;
+                case '}' or ']' or ')': depth--; break;
+                case ',' when depth == 0: list.Add(s[start..i]); start = i + 1; break;
+            }
+        if (s.Length > 0) list.Add(s[start..]);
+        return list;
     }
 
     // XML documentation files of the newest .NET reference packs next to the runtime dnspysql runs on
@@ -117,11 +154,51 @@ public static class ApiDocTables
         }
     }
 
-    // The pack files in the order most likely to document the id, each parsed on first use (parsing all ~250 of them
-    // up front cost seconds per process): the file named after the longest namespace prefix of the member
-    // (System.Net.Sockets.xml for System.Net.Sockets.Socket), System.Runtime.xml (the core types), the files of the same
-    // namespace family (System.Drawing.*), then the rest. A documented member is usually found in the first few; only an
-    // undocumented one reads them all (on a 20-sample check the first three groups held 2157 of 2159 hits).
+    // Which pack files document each type (its members included), from one pass over their raw bytes: ~280 files, ~60 MB,
+    // a fraction of a second, where parsing them all (what an undocumented member used to cost) took seconds.
+    static Dictionary<string, List<string>>? _typeIndex;
+
+    static Dictionary<string, List<string>> TypeIndex()
+    {
+        lock (_lock)
+        {
+            if (_typeIndex != null) return _typeIndex;
+            var index = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var marker = "<member name=\""u8;
+            foreach (var f in PackFiles())
+            {
+                byte[] bytes;
+                try { bytes = File.ReadAllBytes(f); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                var span = bytes.AsSpan();
+                for (int at = span.IndexOf(marker); at >= 0; )
+                {
+                    var rest = span[(at + marker.Length)..];
+                    int q = rest.IndexOf((byte)'"');
+                    if (q < 0) break;
+                    var key = TypeKey(Encoding.UTF8.GetString(rest[..q]));
+                    if (!index.TryGetValue(key, out var files)) index[key] = files = new List<string>(1);
+                    if (files.Count == 0 || files[^1] != f) files.Add(f);
+                    span = rest[q..];
+                    at = span.IndexOf(marker);
+                }
+            }
+            return _typeIndex = index;
+        }
+    }
+
+    // the type a documentation ID belongs to: T:Ns.Type itself, M:Ns.Type.Method(...) / P: / F: / E: their declaring type
+    internal static string TypeKey(string id)
+    {
+        var name = id.Length > 2 && id[1] == ':' ? id[2..] : id;
+        if (id.StartsWith("T:", StringComparison.Ordinal)) return name;
+        if (name.IndexOf('(') is var paren and >= 0) name = name[..paren];
+        return name.LastIndexOf('.') is var dot and > 0 ? name[..dot] : name;
+    }
+
+    // The pack files that document the id's type, in the order most likely to hold it, each parsed on first use: the
+    // file named after the longest namespace prefix of the member (System.Net.Sockets.xml for System.Net.Sockets.Socket),
+    // System.Runtime.xml (the core types), the files of the same namespace family (System.Drawing.*), then the rest.
+    // A type no file documents costs nothing.
     static IEnumerable<(string File, XmlDocumentationProvider Provider)> PacksFor(string id)
     {
         var name = id.Length > 2 && id[1] == ':' ? id[2..] : id;
@@ -135,7 +212,8 @@ public static class ApiDocTables
                 : a == "System.Runtime" ? 500
                 : (a + ".").StartsWith(family, StringComparison.Ordinal) ? 100 : 0;
         }
-        var ordered = PackFiles().OrderByDescending(Rank);
+        if (!TypeIndex().TryGetValue(TypeKey(id), out var documenting)) yield break;
+        var ordered = documenting.OrderByDescending(Rank).ToList();
         foreach (var f in ordered)
         {
             XmlDocumentationProvider? p;

@@ -40,10 +40,11 @@ public static class CoreFunctions
             if (ws.HandleArg(a[0]) is not long h) return null;
             try { var (_, it) = ws.Resolve(h); return (it as IFullName)?.FullName ?? it.ToString(); } catch { return null; }
         }, "name_of(handle)", "full name of any entity", "core");
-        s.Fn("resolve", 1, 2, a => Resolve(s, Str(a[0], "name"), Values.ToText(a.Arg(1))),
-            "resolve(name [, kind])", "find a handle by full name: 'Ns.Type', 'Ns.Outer/Nested', 'Ns.Type::Method', 'Ns.Type::Method(System.String,System.Int32)' " +
+        s.Fn("resolve", 1, 3, a => Resolve(s, Str(a[0], "name"), Values.ToText(a.Arg(1)), a.Arg(2) == null ? null : ws.ModuleArg(a.Arg(2))),
+            "resolve(name [, kind [, module]])", "find a handle by full name: 'Ns.Type', 'Ns.Outer/Nested', 'Ns.Type::Method', 'Ns.Type::Method(System.String,System.Int32)' " +
             "(an overload by its parameter types), 'Ns.Type::field', 'Ns.Type::.ctor'. First match, with a note when a method name has several " +
-            "overloads; NULL when nothing matches. kind = type|method|field|property|event", "core");
+            "overloads; NULL when nothing matches. kind = type|method|field|property|event (NULL: any). Searches the given module, else the " +
+            "current one (use_module) first, then the others, with a note when the name is in more than one", "core");
         s.Fn("def_of", 1, 1, a =>
         {
             if (ws.HandleArg(a[0]) is not long h) return null;
@@ -69,10 +70,20 @@ public static class CoreFunctions
                 return null;
             }
             if (ws.Modules.FirstOrDefault(m => string.Equals(m.Path, name, StringComparison.OrdinalIgnoreCase)) is { } open && !open.OriginalBytes.AsSpan().SequenceEqual(data))
-                throw new SqlException($"a module named '{name}' is already open with other bytes (module {open.Id}); give this one another name");
+                throw new SqlException($"a module named '{name}' is already open with other bytes (module {open.Id}); give this one another name, " +
+                                       "or leave the name out to get one from its hash");
+            // the same bytes under another name would be a second copy of every row, and every name in it ambiguous; an
+            // edited module is not those bytes any more, so a pristine copy of it can still be opened
+            if (ws.Modules.FirstOrDefault(m => !m.Dirty && m.OriginalBytes.Length == data.Length && m.OriginalBytes.AsSpan().SequenceEqual(data)) is { } same)
+            {
+                if (!string.Equals(same.Path, name, StringComparison.OrdinalIgnoreCase))
+                    s.Notices.Add($"open_bytes: {name}: the same bytes are open as module {same.Id} ({same.Path}); returned it");
+                return (long)same.Id;
+            }
             return (long)s.OpenBytes(data, name, Values.ToLong(a.Arg(2)) == 1).Id;
         }, "open_bytes(data [, name [, memory_layout]])",
             "load a module from a blob, such as a payload decrypted or decompressed with SQL; it is only parsed, never run. " +
+            "The name defaults to memory-<sha256 prefix>.dll, unique per payload; bytes already open return that module, with a note. " +
             "memory_layout = 1 for an image dumped from memory. Returns its module id (NULL for NULL data, and for a native PE, with a note)", "session");
         // Anti-tamper keeps method bodies encrypted in the file until a startup routine decrypts them in memory:
         // interpreting that routine over a copy of the image (Emulator.Untamper) gives the decrypted file.
@@ -82,6 +93,9 @@ public static class CoreFunctions
             dnlib.DotNet.MethodDef init;
             if (Values.ToLong(a.Arg(2)) is long ih)
                 init = lm.Module.ResolveToken(Handle.Token(ws.Normalize(ih))) as dnlib.DotNet.MethodDef ?? throw new SqlException("initializer is not a method");
+            else if (lm.Origin == "untamper") // its routine already ran: again, it would decrypt the decrypted bodies
+                throw new SqlException($"module {lm.Id} is untamper()'s decrypted copy of module {lm.DerivedFrom}; untamper that one " +
+                                       "(pass another initializer for the bodies still encrypted), or pass the initializer to run one here anyway");
             else if (Tables.HexTables.Undecodable(lm).Count == 0) // found by shape only: nothing encrypted means nothing to look for
                 throw new SqlException("every method body already decodes as IL: nothing to untamper (pass the initializer to run it anyway)");
             else
@@ -91,7 +105,7 @@ public static class CoreFunctions
             try { image = new Emulator(s, () => s.Db.Cancellation).Untamper(init); }
             catch (Emulator.Failed e) { throw new SqlException(e.Message); }
             var name = Values.ToText(a.Arg(1)) ?? Path.GetFileNameWithoutExtension(lm.Path) + ".untampered" + Path.GetExtension(lm.Path);
-            var opened = s.OpenBytes(image, name, false);
+            var opened = s.OpenBytes(image, name, false, lm, init.MDToken.Raw);
             // the routine may decrypt only part of the image (or with a key that came out wrong): say so, the module is still useful
             int left = Tables.HexTables.Undecodable(opened).Count, total = Tables.HexTables.Bodies(opened).Count;
             if (left > 0) s.Notices.Add($"untamper: {left} of {total} method bodies of module {opened.Id} still do not decode as IL (see method_bodies)");
@@ -206,34 +220,54 @@ public static class CoreFunctions
     static string Str(object? v, string what) => TableKit.Str(v, what);
     static long Lng(object? v, string what) => TableKit.Lng(v, what);
 
-    public static long? Resolve(Session s, string name, string? kind)
+    public static long? Resolve(Session s, string name, string? kind, LoadedModule? only = null)
     {
         var ws = s.Ws;
         string typePart = name, member = "";
         var sep = name.IndexOf("::", StringComparison.Ordinal);
         if (sep >= 0) { typePart = name[..sep]; member = name[(sep + 2)..]; }
-        foreach (var lm in ws.Modules)
+        var paren = member.IndexOf('(');
+        var mname = paren >= 0 ? member[..paren] : member;
+        string? overloadNote = null;
+
+        long? In(LoadedModule lm)
         {
             var t = lm.Module.Find(typePart.Replace('+', '/'), false)
                     ?? lm.Module.GetTypes().FirstOrDefault(x => x.FullName == typePart || x.ReflectionFullName == typePart);
-            if (t == null) continue;
-            if (member.Length == 0) { if (kind is null or "type") return lm.H(t); continue; }
-            var paren = member.IndexOf('(');
-            var mname = paren >= 0 ? member[..paren] : member;
+            if (t == null) return null;
+            if (member.Length == 0) return kind is null or "type" ? lm.H(t) : null;
             if (kind is null or "method")
             {
                 var overloads = t.Methods.Where(m => m.Name == mname && (paren < 0 || MemberTables.Signature(m).Contains(member[paren..]) || m.FullName.EndsWith(member))).ToList();
                 // the first of several overloads is a guess: say so, since a patch or comment on the wrong one goes unnoticed
                 if (overloads.Count > 1)
-                    s.Notices.Add($"resolve: '{name}' matches {overloads.Count} methods; returned the first, {overloads[0].FullName} " +
-                                  $"(name one with its parameter types: '{typePart}::{mname}({string.Join(",", overloads[1].MethodSig?.Params.Select(p => p.FullName) ?? [])})')");
+                    overloadNote ??= $"resolve: '{name}' matches {overloads.Count} methods; returned the first, {overloads[0].FullName} " +
+                                     $"(name one with its parameter types: '{typePart}::{mname}({string.Join(",", overloads[1].MethodSig?.Params.Select(p => p.FullName) ?? [])})')";
                 if (overloads.Count > 0) return lm.H(overloads[0]);
             }
             if (kind is null or "field" && t.Fields.FirstOrDefault(f => f.Name == mname) is { } fd) return lm.H(fd);
             if (kind is null or "property" && t.Properties.FirstOrDefault(p => p.Name == mname) is { } pd) return lm.H(pd);
             if (kind is null or "event" && t.Events.FirstOrDefault(e => e.Name == mname) is { } ed) return lm.H(ed);
+            return null;
         }
-        return null;
+
+        // the current module first (use_module), then the others in load order; a name in several modules (an untamper()
+        // copy, a stage opened twice) gets a note, since following it into the wrong module goes unnoticed
+        IEnumerable<LoadedModule> order = only != null ? [only] : ws.Modules.OrderBy(m => m.Id == ws.CurrentModuleId ? 0 : 1).ThenBy(m => m.Id);
+        long? found = null;
+        var others = new List<int>();
+        foreach (var lm in order)
+        {
+            if (In(lm) is not long h) continue;
+            if (found == null) { found = h; if (overloadNote != null) s.Notices.Add(overloadNote); }
+            else others.Add(lm.Id);
+        }
+        // once per statement: resolve() over many rows of an untamper() copy would otherwise note every name
+        const string several = "resolve: names in several modules";
+        if (found is long f && others.Count > 0 && !s.Notices.Any(n => n.StartsWith(several, StringComparison.Ordinal)))
+            s.Notices.Add($"{several}: '{name}' is in modules {Handle.Module(f)} and {string.Join(", ", others)}; returned module {Handle.Module(f)}'s " +
+                          $"(the current module, else the first loaded; resolve(name, kind, module) picks one)");
+        return found;
     }
 
     // A parameterless static method that takes the module's base address (Marshal.GetHINSTANCE) and makes it writable

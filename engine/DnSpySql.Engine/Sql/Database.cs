@@ -44,6 +44,10 @@ public sealed class Database
     /// <summary>Cancelled by <see cref="Interrupt"/> or the statement timeout: lets long managed work (decompiler) stop too.</summary>
     public CancellationToken Cancellation => _cts.Token;
 
+    /// <summary>The running statement's timeout, and the time it has left; null when it has none.</summary>
+    public TimeSpan? Timeout { get; private set; }
+    public TimeSpan? Remaining => _deadline == long.MaxValue ? null : TimeSpan.FromSeconds((double)(_deadline - Stopwatch.GetTimestamp()) / Stopwatch.Frequency);
+
     public VirtualTable Table(string name) =>
         _byName.TryGetValue(name, out var t) ? t : throw new SqlException($"no such table: {name}");
 
@@ -94,6 +98,7 @@ public sealed class Database
         _interrupt = false;
         if (_cts.IsCancellationRequested) { _cts.Dispose(); _cts = new CancellationTokenSource(); }
         _deadline = timeoutMs > 0 ? Stopwatch.GetTimestamp() + timeoutMs * Stopwatch.Frequency / 1000 : long.MaxValue;
+        Timeout = timeoutMs > 0 ? TimeSpan.FromMilliseconds(timeoutMs) : null;
         if (timeoutMs > 0) _cts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
         foreach (var t in _tables) t.ResetRegistry();
         BeforeStatement?.Invoke();

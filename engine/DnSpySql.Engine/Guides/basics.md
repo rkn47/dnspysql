@@ -29,7 +29,8 @@ tables and dnSpy's breakpoint configuration. Other guides: `SELECT topic, title 
   and a bare token (`0x06000014`, current module: `use_module(id)`) are all accepted as input.
 - `resolve('Ns.Type')`, `resolve('Ns.Outer/Nested')`, `resolve('Ns.Type::Method')`, `resolve('Ns.Type::.ctor')`,
   `resolve('Ns.Type::field')`. Name an overload by its parameter types: `resolve('Ns.Type::Load(System.String)')`.
-  Without them the first overload is returned, with a note. `resolve()` returns NULL when nothing matches, and it uses
+  Without them the first overload is returned, with a note. With several modules it searches the current one first
+  and notes a name found in more than one; `resolve(name, NULL, module)` searches one. `resolve()` returns NULL when nothing matches, and it uses
   current names, so after a rename only the new name works. A NULL matches nothing in `WHERE x = resolve(...)`: when
   a query returns 0 rows, check the `resolve()`.
 - `name_of`, `kind_of`, `module_of`, `token_of` and `def_of` (a reference to its definition) go the other way. With

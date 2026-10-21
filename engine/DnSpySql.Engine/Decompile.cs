@@ -90,6 +90,7 @@ public sealed class DecompilerService
         var lang = NormalizeLanguage(language ?? _s.Settings["decompiler_language"].Value);
         var key = (handle, lang, (long)lm.Revision * 1000 + _s.Ws.RefsVersion);
         if (_cache.TryGetValue(key, out var hit)) return hit;
+        if (_evictedAt != (_s.Ws.Revision, _s.Ws.RefsVersion)) Evict(); // an edit since: what was decompiled before it is stale
         var token = Handle.Token(handle);
         var entity = lm.Module.ResolveToken(token) ?? throw new SqlException($"cannot resolve {Handle.Hex(handle)}");
         var r = new DecompileResult();
@@ -98,9 +99,30 @@ public sealed class DecompilerService
         if (piece.Error != null) { r.Completed = false; r.Error = piece.Error; }
         r.Lines = Lines(lm, piece);
         r.MakeRefs = () => Refs(piece);
-        if (_cache.Count > 2000) _cache.Clear();
+        // room for every type of a large module (decompile_module goes through here), bounded by the text it holds
+        _cachedChars += r.Text.Length;
+        if (_cache.Count >= 20000 || _cachedChars > MaxCachedChars) { _cache.Clear(); _cachedChars = r.Text.Length; }
         _cache[key] = r;
         return r;
+    }
+
+    const long MaxCachedChars = 64L << 20;
+    long _cachedChars;
+
+    bool IsCached(long handle, string lang) =>
+        _cache.ContainsKey((handle, lang, (long)_s.Ws.Get(Handle.Module(handle)).Revision * 1000 + _s.Ws.RefsVersion));
+
+    // drops the entries of earlier revisions (each edit bumps the module's revision, so they can never be hit again)
+    (long, long) _evictedAt = (-1, -1);
+
+    void Evict()
+    {
+        _evictedAt = (_s.Ws.Revision, _s.Ws.RefsVersion);
+        foreach (var k in _cache.Keys.Where(k => k.rev != (long)_s.Ws.Get(Handle.Module(k.handle)).Revision * 1000 + _s.Ws.RefsVersion).ToList())
+        {
+            _cachedChars -= _cache[k].Text.Length;
+            _cache.Remove(k);
+        }
     }
 
     // Bodies that do not decode as IL in the file (anti-tamper encrypts them until runtime) come out of the decompiler
@@ -214,8 +236,38 @@ public sealed class DecompilerService
 
     public string Il(LoadedModule lm, uint token) => Decompile(lm.H(token), "il").Text;
 
-    public string DecompileModule(LoadedModule lm, string? language = null) =>
-        DnSpyDecompiler.Module(lm, Kind(NormalizeLanguage(language)));
+    // Whole-module output, assembled type by type through the per-type cache: one unreadable type costs only its own body
+    // (annotated in place), a type decompiled before comes back at once, and under a statement timeout it stops between
+    // types with a note instead of losing everything to the timeout: running it again goes on from there.
+    public string DecompileModule(LoadedModule lm, string? language = null)
+    {
+        var lang = NormalizeLanguage(language);
+        var sb = new StringBuilder(DnSpyDecompiler.ModuleHeader(lm, Kind(lang)));
+        var types = lm.Module.GetTypes().Where(t => t.DeclaringType == null).ToList(); // nested types come with their parent
+        int done = 0, fresh = 0, incomplete = 0;
+        // a type can take its whole budget (20 s and more): stop while there is still time to return what is done. A type
+        // already decompiled costs nothing, and each call decompiles at least one more, so running it again goes on.
+        var margin = _s.Db.Timeout is { } timeout ? TimeSpan.FromTicks(Math.Max(TimeSpan.FromSeconds(2).Ticks, timeout.Ticks * 15 / 100)) : TimeSpan.Zero;
+        foreach (var t in types)
+        {
+            bool cached = IsCached(lm.H(t), lang);
+            if (!cached && fresh > 0 && _s.Db.Remaining is { } left && left < margin) break;
+            if (!cached) fresh++;
+            _s.Db.Cancellation.ThrowIfCancellationRequested();
+            var r = Decompile(lm.H(t), lang);
+            sb.AppendLine().AppendLine(r.Text.TrimEnd('\n', '\r'));
+            if (!r.Completed) incomplete++;
+            done++;
+        }
+        if (done < types.Count)
+            sb.AppendLine().Append(DnSpyDecompiler.FailMarker)
+              .AppendLine($"stopped after {done} of {types.Count} types to finish within the statement timeout ({_s.Db.Timeout!.Value.TotalSeconds:0} s). " +
+                          $"The types done are kept for the session: run it again to go on, or decompile the rest one by one " +
+                          $"(SELECT decompile(handle) FROM types WHERE module = {lm.Id} AND declaring_type IS NULL) */");
+        if (incomplete > 0)
+            sb.AppendLine().Append(DnSpyDecompiler.FailMarker).AppendLine($"{done} type(s) decompiled, {incomplete} of them incomplete (see the comments in them) */");
+        return sb.ToString();
+    }
 
     /// <summary>dnSpy's BAML decompiler: a compiled WPF resource back to XAML.</summary>
     public string BamlToXaml(LoadedModule lm, byte[] baml) => Baml.ToXaml(lm.Module, baml, _s.Db.Cancellation);
@@ -575,38 +627,14 @@ static class DnSpyDecompiler
         public bool CanDecompile(DecompilationType decompilationType) => D.CanDecompile(decompilationType);
     }
 
-    // Whole-module output is assembled type by type, so one unreadable type costs
-    // only its own body: it is annotated in place and the rest still comes back.
-    public static string Module(LoadedModule m, Lang lang)
+    // The module's own part of a whole-module listing (assembly attributes and the like); the types follow, one by one
+    // (DecompilerService.DecompileModule).
+    public static string ModuleHeader(LoadedModule m, Lang lang)
     {
         XmlDocGuard.Check(m.Module);
         var dec = For(lang);
-        var sb = new StringBuilder();
-        int ok = 0, bad = 0;
-
-        try { sb.Append(Run((o, c) => dec.Decompile(m.Module, o, c)).Text); }
-        catch (Exception e) when (e is not OutOfMemoryException && !Interrupted) { sb.AppendLine(Fail("module header", e)); }
-
-        foreach (var t in m.Module.GetTypes())
-        {
-            if (t.DeclaringType != null) continue; // nested types come with their parent
-            Outer().ThrowIfCancellationRequested();
-            sb.AppendLine();
-            try
-            {
-                sb.AppendLine(TypeText(dec, t, lang).Text);
-                ok++;
-            }
-            catch (Exception e) when (e is not OutOfMemoryException && !Interrupted)
-            {
-                sb.AppendLine(Fail($"decompile {t.FullName} (0x{t.MDToken.Raw:X8})", e));
-                bad++;
-            }
-        }
-
-        if (bad > 0)
-            sb.AppendLine().Append(FailMarker).AppendLine($"{ok} type(s) decompiled, {bad} failed */");
-        return sb.ToString();
+        try { return Run((o, c) => dec.Decompile(m.Module, o, c)).Text; }
+        catch (Exception e) when (e is not OutOfMemoryException && !Interrupted) { return Fail("module header", e) + "\n"; }
     }
 }
 

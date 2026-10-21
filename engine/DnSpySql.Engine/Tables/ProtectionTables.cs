@@ -48,7 +48,7 @@ public static class ProtectionTables
                 "PE files inside a module: anywhere in its file bytes (the overlay, uncompressed resources, a section) and in " +
                 "resources or .resources entries, also behind gzip/zlib/deflate, and one stored in pieces across numbered resources " +
                 "(part1..partN: joined in order or reversed, also as base64 text). Size from the PE headers; " +
-                "SELECT open_bytes(data, name) FROM embedded_pes WHERE is_dotnet opens the next stage") { Domain = "triage" }
+                "SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet opens each next stage") { Domain = "triage" }
             .Source(c => s.Ws.Modules(c).SelectMany(Carve))
             .Int("module", r => r.M.Id, pushdown: Pushdown.Eq)
             .Text("location", r => r.Location, doc: "overlay | section .text (or another) | resource 'name' | element 'name' of resource 'name', with ' (gzip)' etc. when inflated")
@@ -59,6 +59,9 @@ public static class ProtectionTables
             .Text("kind", r => r.IsDll ? "dll" : "exe")
             .Text("sha256", r => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(r.Slice())).ToLowerInvariant())
             .Blob("data", r => r.Slice().ToArray(), doc: "the PE's bytes (open_bytes(data) opens a .NET one)")
+            .Int("parent_offset", r => r.Parent,
+                doc: "file offset of the row whose PE contains this one (a payload inside a payload, in the file bytes); NULL when not nested, " +
+                     "so WHERE parent_offset IS NULL counts each top-level PE once")
             .Estimate(5, 50));
 
         var ws = s.Ws;
@@ -191,6 +194,8 @@ public static class ProtectionTables
             int zeroed = bad.Count(b => Zeroed(m.OriginalBytes, b.FileOffset));
             var (needed, have) = PeTables.Truncated(m);
             string? advice = invalid == 0 ? null
+                : m.Origin == "untamper" ? $"left encrypted by the routine untamper() ran on module {m.DerivedFrom}: another routine of that module " +
+                                           $"(untamper({m.DerivedFrom}, name, initializer)) or a memory dump has them; running it again here would decrypt the decrypted ones twice"
                 : needed > have ? $"the file is truncated ({have:N0} of {needed:N0} bytes): damage, not protection; a complete copy has them"
                 : zeroed * 2 > invalid ? "zero-filled in the file: written at runtime, so only a memory dump of the running process has them (open it with open_bytes)"
                 : Functions.CoreFunctions.AntiTamperInitializer(s, m) is { } init
@@ -200,7 +205,9 @@ public static class ProtectionTables
                 string.Join("; ", new[]
                 {
                     virtualProtect ? "<Module> P/Invokes VirtualProtect" : null,
-                    invalid > 0 ? $"{invalid} of {bodies.Count} method bodies do not parse as IL ({advice})" : null,
+                    invalid > 0 ? $"{invalid} of {bodies.Count} method bodies do not parse as IL ({advice})"
+                    : m.Origin == "untamper" ? $"this is the decrypted copy of module {m.DerivedFrom} (untamper()): every method body parses as IL"
+                    : "every method body parses as IL: nothing is encrypted in the file, untamper() has nothing to do",
                 }.Where(x => x != null))));
         }
 
@@ -330,6 +337,8 @@ public static class ProtectionTables
 
     public sealed record Carved(LoadedModule M, string Location, long Offset, long Size, ushort Machine, bool IsDll, byte[] Source)
     {
+        /// <summary>The file offset of the smallest other PE in the file bytes that contains this one; null when none does.</summary>
+        public long? Parent { get; init; }
         public ReadOnlySpan<byte> Slice() => Source.AsSpan((int)Offset, (int)Math.Min(Size, Source.Length - Offset));
     }
 
@@ -354,13 +363,20 @@ public static class ProtectionTables
         var file = m.DiskBytes;
         var sections = m.FileMetadata.PEImage.ImageSectionHeaders;
         long end = sections.Select(h => (long)h.PointerToRawData + h.SizeOfRawData).DefaultIfEmpty(0).Max();
+        // found in offset order, so a PE that holds others (a dropper's payload with its own payloads) comes first: the
+        // containers still open at an offset are a stack, innermost on top
+        var open = new Stack<(long Start, long End)>();
         for (int at = file.AsSpan(1).IndexOf("MZ"u8) + 1; at > 0; )
         {
             if (Header(file, at) is { } pe && seen.Add(Key(file, at, pe.Size)))
             {
                 var section = sections.FirstOrDefault(h => at >= h.PointerToRawData && at < (long)h.PointerToRawData + h.SizeOfRawData);
                 var where = at >= end ? "overlay" : section != null ? $"section {section.DisplayName}" : "headers";
-                yield return new Carved(m, where, at, pe.Size, pe.Machine, pe.Dll, file);
+                long end2 = at + Math.Min(pe.Size, file.Length - at);
+                while (open.Count > 0 && open.Peek().End < end2) open.Pop(); // ends before this one does: does not contain it
+                var c = new Carved(m, where, at, pe.Size, pe.Machine, pe.Dll, file) { Parent = open.Count > 0 ? open.Peek().Start : null };
+                open.Push((at, end2));
+                yield return c;
             }
             int next = file.AsSpan(at + 1).IndexOf("MZ"u8);
             at = next < 0 ? -1 : at + 1 + next;
@@ -730,9 +746,10 @@ public static class ProtectionTables
     }
 
     // The n arguments pushed right before the call, all literals, or null. Steps back over nops and over a branch to the
-    // very next instruction (obfuscators insert one between the ldc and the call).
+    // very next instruction (obfuscators insert one between the ldc and the call). Only a call passes arguments: what
+    // precedes an ldftn (a delegate's target object) is not one.
     static List<Lit>? Arguments(XRef x, int n, Fold fold) =>
-        TryBody(x.From, out var ins) && x.Index < ins.Count ? ArgumentsAt(ins, x.Index, n, fold) : null;
+        x.Kind is "call" or "callvirt" && TryBody(x.From, out var ins) && x.Index < ins.Count ? ArgumentsAt(ins, x.Index, n, fold) : null;
 
     internal static List<Lit>? ArgumentsAt(IList<Instruction> ins, int at, int n, Fold fold)
     {

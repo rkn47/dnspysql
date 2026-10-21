@@ -1,7 +1,9 @@
 # Protected and packed assemblies
 
 Nothing here runs the sample: `untamper()`, `emulate()` and `decryptor_calls` interpret IL, and `open_bytes()` only
-parses. A decoded stage is a new module; analyze it with `WHERE module = <id>`.
+parses. A decoded stage is a new module; analyze it with `WHERE module = <id>`. `modules.origin` and `derived_from`
+say where each one came from. An `untamper()` copy has every name of its original, so follow handles, or
+`use_module(<id>)` first: `resolve()` searches the current module first.
 
 ## Signals
 
@@ -18,7 +20,8 @@ SELECT path, size, entropy FROM file_map WHERE kind = 'gap' AND NOT all_zero ORD
 | signal | next |
 |---|---|
 | anti-tamper, many invalid bodies | `SELECT untamper()`: returns the decrypted module's id |
-| `embedded_pes` rows | `SELECT open_bytes(data, 'stage2.dll') FROM embedded_pes WHERE is_dotnet` |
+| anti-tamper, every body decodes | nothing to decrypt: the protection's code is there, its effect is not |
+| `embedded_pes` rows | `SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet`: one module per stage, named from its hash |
 | resource with content_type high entropy, gzip, zlib | find the loader, then rebuild its decode chain in SQL |
 | images a loader reads pixel by pixel | `image_pixels()` |
 | `bundle_entries` rows | `open_bundle_entry('Name.dll')` |
