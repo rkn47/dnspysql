@@ -915,7 +915,7 @@ Required filter: `WHERE target = ...`
 
 ### `pseudocode`
 
-Decompiled source, one row per entity: WHERE handle = ... [AND language = 'csharp'|'il']. Exact output, no annotations
+Decompiled source, one row per entity: WHERE handle = ... [AND language = 'csharp'|'vb'|'il']. Exact output, no annotations
 
 Required filter: `WHERE handle = ...`
 
@@ -1818,7 +1818,7 @@ SELECT dll, entry, count(*) AS method_count, group_concat(method_name, '; ') AS 
 
 | signature | writes | description |
 |---|---|---|
-| `decompile(handle [, 'csharp'\|'il'])  or  decompile(token [, module [, lang]])` |  | decompile a type/method/field/property/event with dnSpy's engine (reflects edits). A failure comes back as text starting /* dnspysql: so bulk queries never abort |
+| `decompile(handle [, 'csharp'\|'vb'\|'il'])  or  decompile(token [, module [, lang]])` |  | decompile a type/method/field/property/event with dnSpy's engine (reflects edits). A failure comes back as text starting /* dnspysql: so bulk queries never abort |
 | `decompile_module([module [, lang]])` |  | source for a whole module, assembled type by type (large!) |
 | `export_project(dir [, module [, sdk]])  or  export_project(module, dir)` |  | dnSpy 'Export to Project' with its dialog's defaults: a solution with one C# project per module (all loaded modules when module is NULL), resources unpacked to .resx; sdk = 1 for SDK-style projects. Returns the .sln path |
 | `il_text(handle)  or  il_text(token [, module])` |  | ildasm-style disassembly |

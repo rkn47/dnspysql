@@ -270,7 +270,7 @@ Every table and view, by area. *writes* lists what the table accepts besides `SE
 | table | writes | description |
 |---|---|---|
 | `baml` |  | BAML resources decompiled to XAML (WPF) |
-| `pseudocode` |  | Decompiled source, one row per entity, in C# or IL (`language`) (needs `WHERE handle = ...`) |
+| `pseudocode` |  | Decompiled source, one row per entity, in C#, VB or IL (`language`) (needs `WHERE handle = ...`) |
 | `pseudocode_lines` |  | Decompiled source, one row per line with the IL offset of the statement starting on it (needs `WHERE handle = ...`) |
 | `pseudocode_refs` |  | Names in the decompiled source and what they refer to (dnSpy's click-to-definition): members, locals, parameters, labels (needs `WHERE handle = ...`) |
 

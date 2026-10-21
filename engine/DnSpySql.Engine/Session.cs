@@ -119,7 +119,7 @@ public sealed class Session : IDisposable
         Add("query_timeout_ms", "int", Options.QueryTimeoutMs.ToString(), "per-statement timeout in milliseconds (0 = none)");
         Add("max_rows", "int", Options.MaxRows.ToString(), "row cap per statement for CLI/HTTP/MCP output");
         Add("current_module", "int", "1", "module used when a bare metadata token is given");
-        Add("decompiler_language", "string", "csharp", "default language for pseudocode/decompile(): csharp | il");
+        Add("decompiler_language", "string", "csharp", "default language for pseudocode/decompile(): csharp | vb | il");
         Add("decompiler_show_tokens", "bool", "0", "emit metadata token comments in IL text");
         Add("search_include_compiler_generated", "bool", "0", "search/jump_entities: include compiler-generated members");
         Add("save_preserve_tokens", "bool", "1", "save(): keep all metadata tokens/RIDs (dnSpy 'Preserve All')");

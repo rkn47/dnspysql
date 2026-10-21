@@ -35,13 +35,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="$(IlSpyFork)/dnSpy.Decompiler.ILSpy.Core/**/*.cs" Exclude="$(IlSpyFork)/dnSpy.Decompiler.ILSpy.Core/VisualBasic/**/*.cs" />
+    <Compile Include="$(IlSpyFork)/dnSpy.Decompiler.ILSpy.Core/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../ContractsLogic/DnSpySql.Vendor.ContractsLogic.csproj" />
     <ProjectReference Include="../NRefactory/DnSpySql.Vendor.NRefactory.csproj" />
     <ProjectReference Include="../NRefactory.CSharp/DnSpySql.Vendor.NRefactory.CSharp.csproj" />
+    <ProjectReference Include="../NRefactory.VB/DnSpySql.Vendor.NRefactory.VB.csproj" />
     <ProjectReference Include="../Decompiler/DnSpySql.Vendor.Decompiler.csproj" />
     <ProjectReference Include="../DnSpyDecompiler/DnSpySql.Vendor.DnSpyDecompiler.csproj" />
   </ItemGroup>

@@ -69,7 +69,15 @@ public sealed class DecompilerService
     {
         "" or "csharp" or "cs" or "c#" => "csharp",
         "il" or "cil" or "msil" => "il",
-        var other => throw new SqlException($"unknown language '{other}' (csharp | il)"),
+        "vb" or "vb.net" or "visualbasic" or "visual basic" => "vb",
+        var other => throw new SqlException($"unknown language '{other}' (csharp | vb | il)"),
+    };
+
+    static DnSpyDecompiler.Lang Kind(string lang) => lang switch
+    {
+        "il" => DnSpyDecompiler.Lang.Il,
+        "vb" => DnSpyDecompiler.Lang.Vb,
+        _ => DnSpyDecompiler.Lang.CSharp,
     };
 
     // Decompiling is the expensive call and a query often names the same result more than once (SQLite inlines
@@ -85,7 +93,7 @@ public sealed class DecompilerService
         var token = Handle.Token(handle);
         var entity = lm.Module.ResolveToken(token) ?? throw new SqlException($"cannot resolve {Handle.Hex(handle)}");
         var r = new DecompileResult();
-        var piece = DnSpyDecompiler.Entity(lm, entity, lang == "il" ? DnSpyDecompiler.Lang.Il : DnSpyDecompiler.Lang.CSharp);
+        var piece = DnSpyDecompiler.Entity(lm, entity, Kind(lang));
         r.Text = piece.Text + (Note(lm, entity) is { } note ? (piece.Text.EndsWith('\n') ? "" : "\n") + note + "\n" : "");
         if (piece.Error != null) { r.Completed = false; r.Error = piece.Error; }
         r.Lines = Lines(lm, piece);
@@ -207,7 +215,7 @@ public sealed class DecompilerService
     public string Il(LoadedModule lm, uint token) => Decompile(lm.H(token), "il").Text;
 
     public string DecompileModule(LoadedModule lm, string? language = null) =>
-        DnSpyDecompiler.Module(lm, NormalizeLanguage(language) == "il" ? DnSpyDecompiler.Lang.Il : DnSpyDecompiler.Lang.CSharp);
+        DnSpyDecompiler.Module(lm, Kind(NormalizeLanguage(language)));
 
     /// <summary>dnSpy's BAML decompiler: a compiled WPF resource back to XAML.</summary>
     public string BamlToXaml(LoadedModule lm, byte[] baml) => Baml.ToXaml(lm.Module, baml, _s.Db.Cancellation);
@@ -273,7 +281,7 @@ static class DnSpyDecompiler
         ? "exceeded the decompile time budget"
         : e.Message.ReplaceLineEndings(" ").Replace("*/", "* /").Trim();
 
-    public enum Lang { CSharp, Il }
+    public enum Lang { CSharp, Il, Vb }
 
     // The decompilers are stateless with respect to the module (it is passed per
     // call), so one instance each is enough for the session.
@@ -281,10 +289,14 @@ static class DnSpyDecompiler
     static readonly Lazy<CSharpDecompiler> csharp = new(() => new CSharpDecompiler(csharpSettings, 0));
     static readonly Lazy<IDecompiler> il =
         new(() => new ILDecompiler(new ILDecompilerSettings()));
+    // dnSpy's VB decompiler: the C# syntax tree converted to VB (same settings as C#).
+    static readonly Lazy<IDecompiler> vb =
+        new(() => new dnSpy.Decompiler.ILSpy.Core.VisualBasic.VBDecompiler(csharpSettings));
 
     static IDecompiler For(Lang lang) => lang switch
     {
         Lang.Il => il.Value,
+        Lang.Vb => vb.Value,
         _ => csharp.Value,
     };
 
@@ -382,10 +394,10 @@ static class DnSpyDecompiler
         }
     }
 
-    // On a C# failure the IL is still worth having, so it follows the marker.
+    // On a C# or VB failure the IL is still worth having, so it follows the marker.
     static string IlFallback(Lang lang, object entity)
     {
-        if (lang != Lang.CSharp) return "";
+        if (lang == Lang.Il) return "";
         try
         {
             var text = entity switch

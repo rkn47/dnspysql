@@ -21,6 +21,28 @@ public sealed class DecompileTests : SampleTest
     }
 
     [Fact]
+    public void Decompiles_to_visual_basic_like_dnspy()
+    {
+        const string isValid = "resolve('Sample.MemberCard::IsValid')";
+        var r = Run($"select decompile({isValid}, 'vb')", "select decompile(resolve('Sample.Square'), 'VB.NET')",
+                    $"select line, il_offset from pseudocode_lines where handle = {isValid} and language = 'vb' and il_offset is not null",
+                    $"select count(*) from pseudocode_refs where handle = {isValid} and language = 'vb' and kind = 'method'",
+                    "select decompile_module(1, 'vb') like '%End Namespace%'",
+                    "select set_setting('decompiler_language', 'vb')", $"select text from pseudocode where handle = {isValid}");
+        Assert.Contains("Public Function IsValid() As Boolean", r.Text(0));
+        Assert.Contains("AndAlso", r.Text(0));
+        Assert.Contains("Public NotInheritable Class Square", r.Text(1));
+        Assert.Contains("Inherits Shape", r.Text(1));
+        // the statement maps to its IL, as for C#: breakpoints and comments line up with dnSpy's VB view
+        Assert.Contains("Return Me.Number.StartsWith", r.Rows(2).Single().GetProperty("line").GetString());
+        Assert.Equal(0, r.Rows(2).Single().GetProperty("il_offset").GetInt64());
+        Assert.True(r.Long(3) >= 2);
+        Assert.Equal(1, r.Long(4));
+        Assert.Contains("End Function", r.Text(6)); // the session default language
+        Assert.Contains("(csharp | vb | il)", Cli.Run(Sample, "select decompile(resolve('Sample.Square'), 'cobol')").Error);
+    }
+
+    [Fact]
     public void Reconstructs_async_methods()
     {
         // Needs Task<T> and the method builder to resolve, i.e. the .NET shared framework on the search path.

@@ -22,7 +22,7 @@ SHORT = {
     "search": "dnSpy's search window, with optional `kind`, `match_mode` (contains, exact, word, regex) and `case_sensitive`",
     "bundle_entries": "Files inside a .NET single-file bundle the module was opened from; `open_bundle_entry(path)` loads an embedded assembly",
     "breakpoints": "Code breakpoints and tracepoints: method + IL offset, condition, hit count, filter, trace message, labels",
-    "pseudocode": "Decompiled source, one row per entity, in C# or IL (`language`)",
+    "pseudocode": "Decompiled source, one row per entity, in C#, VB or IL (`language`)",
     "analyze": "dnSpy's Analyzer as a table-valued function: every relation of `target`, optionally one `relation`",
     "byte_search": "Byte pattern search over the module files (`??` wildcards)",
     "md_rows": "Raw metadata table cells (dnSpy's metadata table view); UPDATE patches the file",

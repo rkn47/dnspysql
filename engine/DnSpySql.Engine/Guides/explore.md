@@ -29,6 +29,7 @@ SELECT handle, signature FROM methods WHERE type = resolve('Ns.Type') AND name =
 ```sql
 SELECT decompile(resolve('Ns.Type::Method'));
 SELECT il_text(resolve('Ns.Type::Method'));
+SELECT decompile(resolve('Ns.Type::Method'), 'vb');   -- VB.NET, as dnSpy shows it (pseudocode* take language = 'vb')
 SELECT line_num, il_offset, line FROM pseudocode_lines WHERE handle = resolve('Ns.Type::Method');
 SELECT line_num, text, kind, target FROM pseudocode_refs WHERE handle = resolve('Ns.Type::Method') AND kind IN ('method','field','property');
 SELECT summary FROM api_docs WHERE doc_id = 'M:System.Convert.FromBase64String(System.String)';

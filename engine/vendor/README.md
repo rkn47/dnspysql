@@ -32,9 +32,10 @@ reproduces its upstream `ProjectReference` set:
 | `ContractsLogic` | `dnSpy.Contracts.Logic` | dnlib |
 | `NRefactory` | `ICSharpCode.NRefactory` | dnlib |
 | `NRefactory.CSharp` | `ICSharpCode.NRefactory.CSharp` | ContractsLogic, NRefactory |
+| `NRefactory.VB` | `ICSharpCode.NRefactory.VB` (from the ILSpy fork's submodule, `ICSharpCode.Decompiler/NRefactory.VB`) | ContractsLogic, NRefactory, NRefactory.CSharp, Decompiler |
 | `Decompiler` | `ICSharpCode.Decompiler` (the fork) | ContractsLogic, NRefactory, NRefactory.CSharp |
 | `DnSpyDecompiler` | `dnSpy.Decompiler` | ContractsLogic |
-| `ILSpyCore` | `dnSpy.Decompiler.ILSpy.Core` | all of the above |
+| `ILSpyCore` | `dnSpy.Decompiler.ILSpy.Core`, with its `VisualBasic/` decompiler | all of the above |
 | `BamlDecompiler` | `dnSpy.BamlDecompiler` (`Extensions/dnSpy.BamlDecompiler`, without WPF: BAML to XAML for the `baml` table) | ContractsLogic, DnSpyDecompiler, Decompiler |
 | `ResXShim` | `System.Windows.Forms` (ResX names only; see below) | — |
 
@@ -60,7 +61,6 @@ access, as `ILSpyCore` does for the decompilers.
 
 ## Not vendored
 
-- `dnSpy.Decompiler.ILSpy.Core/VisualBasic/` — needs the `NRefactory.VB` tree. Would give `lang = vb`.
 - `ILAst` — dnSpy gates `ILAstDecompiler` behind `#if DEBUG` and its constructor is private, so it
   does not exist in a Release build.
 - `dnSpy.Contracts.Logic/Utilities/NuGetPackageLocator.cs` — needs `NuGet.Configuration`.

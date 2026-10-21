@@ -92,11 +92,12 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | dnSpy | dnspysql | |
 |---|---|---|
 | C# decompilation of type/member | `pseudocode` (one row, exact text), `decompile(handle)`: dnSpy's own engine, so the text (and its line numbers) is what dnSpy shows | ✅ |
+| VB decompilation | `decompile(handle, 'vb')`, `pseudocode*` with `language = 'vb'` (line ↔ IL mapping and references too), `decompile_module(m, 'vb')`; setting `decompiler_language` | ✅ |
 | Line ↔ IL offset mapping (MethodDebugInfo) | `pseudocode_lines` (`il_offset`, `method`, comments): the statement spans dnSpy's debugger uses | ✅ |
 | IL disassembly | `il_text(handle)`, `decompile(handle, 'il')` | ✅ |
 | Whole module | `decompile_module()` | ✅ |
 | Export to Project | `export_project(dir [, module [, sdk]])`: dnSpy's own exporter with its dialog's defaults (solution, .resx, BAML → XAML, VS2010 or SDK-style projects), Windows-safe file names | ✅ |
-| VB / IL-with-C# / ILAst debug languages | — | ❌ |
+| IL-with-C# / ILAst debug languages | — | ❌ |
 | Decompiler options UI | `runtime_settings` (`decompiler_language`, `decompiler_show_tokens`) | ◐ |
 | Reference spans in output (click to definition, highlighting) | `pseudocode_refs` (name → definition handle, locals/parameters with decompiled names, writes) | ✅ |
 | Brace ranges in output | — | ❌ |
@@ -314,7 +315,7 @@ configured here and executed by dnSpy.
    DeclSecurity and creating properties/events directly (use `add_members` instead).
 6. **Analyzer fidelity**: accessibility-based scoping, COM/NoPIA equivalence, custom-attribute named-argument writes,
    remapping hits in compiler-generated code to the user method (beyond the async/iterator `MoveNext` link).
-7. **Decompiler**: VB / ILAst languages (dnSpy's VB decompiler needs the NRefactory.VB tree, not vendored),
+7. **Decompiler**: the ILAst debug language (Debug builds of dnSpy only), the VB project export,
    brace ranges, option toggles beyond language/tokens.
 8. **Resources**: creating or replacing image elements, linked resources; decoding GIF/JPEG pixels.
 9. **Writer options**: the full dnSpy save dialog (PE header overrides, metadata/heap options, RID preservation per table).

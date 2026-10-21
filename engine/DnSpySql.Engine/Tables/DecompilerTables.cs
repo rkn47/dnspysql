@@ -1,4 +1,4 @@
-﻿// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Sql;
 using dnlib.DotNet;
 
@@ -25,7 +25,7 @@ public static class DecompilerTables
         }
 
         db.Register(new Table<(long h, string lang, DecompileResult r)>("pseudocode",
-                "Decompiled source, one row per entity: WHERE handle = ... [AND language = 'csharp'|'il']. Exact output, no annotations") { Domain = "decompiler" }
+                "Decompiled source, one row per entity: WHERE handle = ... [AND language = 'csharp'|'vb'|'il']. Exact output, no annotations") { Domain = "decompiler" }
             .Source(One)
             .Int("handle", r => r.h, pushdown: Pushdown.Eq, required: true)
             .Text("language", r => r.lang, pushdown: Pushdown.Eq)

@@ -7,9 +7,10 @@
 | nlohmann/json (via libxsql) | JSON | MIT | https://github.com/nlohmann/json |
 | cpp-httplib (via libxsql) | the `--http` server and the `--remote` client | MIT | https://github.com/yhirose/cpp-httplib |
 | dnlib | .NET metadata reading/writing | MIT | https://github.com/0xd4d/dnlib |
-| dnSpyEx (dnSpy.Contracts.Logic, dnSpy.Decompiler, dnSpy.Decompiler.ILSpy.Core, dnSpy.BamlDecompiler) | C# decompilation and IL disassembly, on the live dnlib model; project export (`export_project`); BAML to XAML (`baml`) | **GPL-3.0-or-later** — full text in `external/dnSpyEx/LICENSE.txt` | https://github.com/dnSpyEx/dnSpy |
+| dnSpyEx (dnSpy.Contracts.Logic, dnSpy.Decompiler, dnSpy.Decompiler.ILSpy.Core, dnSpy.BamlDecompiler) | C# and VB decompilation and IL disassembly, on the live dnlib model; project export (`export_project`); BAML to XAML (`baml`) | **GPL-3.0-or-later** — full text in `external/dnSpyEx/LICENSE.txt` | https://github.com/dnSpyEx/dnSpy |
 | dnSpyEx's ILSpy fork (ICSharpCode.Decompiler, branch `ilspyv2`) | decompiler engine used by the above | MIT | https://github.com/dnSpyEx/ILSpy |
 | NRefactory (ICSharpCode.NRefactory, .CSharp) | C# AST used by the decompiler | MIT | https://github.com/dnSpyEx/nrefactory |
+| NRefactory.VB (ICSharpCode.NRefactory.VB, in the ILSpy fork) | VB AST and output for the VB decompiler | MIT | https://github.com/dnSpyEx/ILSpy |
 | Microsoft.CodeAnalysis.CSharp (Roslyn) | compiling edited C# back to IL | MIT | https://github.com/dotnet/roslyn |
 | System.Configuration.ConfigurationManager | settings types used by dnSpy's project exporter | MIT | https://github.com/dotnet/runtime |
 | .NET hosting (nethost) | runtime hosting | MIT | https://github.com/dotnet/runtime |
@@ -30,8 +31,8 @@ unmodified**. Only these parts are compiled, by the projects under `engine/vendo
 
 - `dnSpy/dnSpy.Contracts.Logic` (minus `Utilities/NuGetPackageLocator.cs`)
 - `dnSpy/dnSpy.Decompiler`, including `MSBuild/`, the project exporter
-- `Extensions/ILSpy.Decompiler/ICSharpCode.Decompiler` (the ILSpy fork) and `NRefactory`
-- `Extensions/ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core` (minus `VisualBasic/`)
+- `Extensions/ILSpy.Decompiler/ICSharpCode.Decompiler` (the ILSpy fork, and its `NRefactory.VB`) and `NRefactory`
+- `Extensions/ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core`
 - `Extensions/dnSpy.BamlDecompiler` (its BAML reader and XAML rewriter, without the WPF UI)
 
 They are compiled into assemblies of their own, mirroring dnSpyEx's own assembly boundaries, because
