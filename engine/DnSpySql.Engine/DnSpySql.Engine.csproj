@@ -18,8 +18,16 @@
 
   <ItemGroup>
     <PackageReference Include="dnlib" Version="4.5.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
   </ItemGroup>
+
+  <!-- Roslyn brings its own analyzers (Microsoft.CodeAnalysis.Analyzers: rules for code that extends the compiler). Those
+       of Roslyn 5 need a newer compiler than the .NET 8 SDK's (CS9057) and check nothing the engine does with Roslyn. -->
+  <Target Name="DropRoslynAnalyzers" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <Analyzer Remove="@(Analyzer)" Condition="'%(Analyzer.NuGetPackageId)' == 'Microsoft.CodeAnalysis.Analyzers'" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <!-- dnSpyEx's dnlib-backed decompiler, vendored under engine/vendor. It

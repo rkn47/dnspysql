@@ -16,7 +16,7 @@ public sealed class TriageTests : SampleTest
         Assert.Equal("bool", rows["Reminders"].GetProperty("kind").GetString());
         Assert.Equal(1, rows["Reminders"].GetProperty("value").GetInt64());
         Assert.Equal("string[]", rows["Branches"].GetProperty("kind").GetString());
-        Assert.Equal(["North", "South"], JsonSerializer.Deserialize<string[]>(rows["Branches"].GetProperty("value").GetString()!));
+        Assert.Equal(["North", "South"], JsonSerializer.Deserialize<string[]>(rows["Branches"].GetProperty("value").GetString()!)!);
         Assert.Equal("bytes", rows["Pattern"].GetProperty("kind").GetString());
         Assert.Equal(1, rows["Motto"].GetProperty("is_default").GetInt64()); // static string Motto = "": the compiler's store of the default
     }
