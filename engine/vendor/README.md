@@ -1,12 +1,12 @@
 # Vendored dnSpyEx decompiler
 
 These projects compile dnSpyEx's decompiler, from the `external/dnSpyEx` submodule, for `net8.0`.
-The submodule is **unmodified**; everything dnspysql adds lives here.
+The submodule is **unmodified**; everything DnSpySql adds lives here.
 
 ## Why dnSpyEx and not the ILSpy NuGet package
 
 dnSpy's decompiler is a fork of ILSpy that reads the **live dnlib model** (52 of its 72 source files
-use dnlib; none use `System.Reflection.Metadata`). That matters here because dnspysql already holds
+use dnlib; none use `System.Reflection.Metadata`). That matters here because DnSpySql already holds
 every assembly as a dnlib `ModuleDefMD`:
 
 - one parse per assembly instead of two;

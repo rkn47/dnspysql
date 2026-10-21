@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 // Native side of the engine bridge: hosts the .NET runtime in-process and
 // speaks the tagged-cell wire format defined in engine/DnSpySql.Engine/Wire.cs.
 #pragma once

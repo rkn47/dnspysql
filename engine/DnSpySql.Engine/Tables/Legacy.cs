@@ -1,11 +1,11 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Sql;
 using dnlib.DotNet;
 
 namespace DnSpySql.Tables;
 
 /// <summary>
-/// The schema of earlier dnspysql versions, on top of the current one: older column names as extra
+/// The schema of earlier DnSpySql versions, on top of the current one: older column names as extra
 /// columns, the overlay and header-repair columns of `modules`, and `refs` / `attributes` as views. Queries written
 /// for either tool run unchanged. One name could not be kept: `params.seq` is now the ECMA sequence number
 /// (0 = return value), and the older 0-based argument position is `params.arg_index`.

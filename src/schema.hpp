@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 // Builds SQLite virtual tables, SQL functions and views from the schema the engine
 // describes. Nothing here is table-specific.
 #pragma once

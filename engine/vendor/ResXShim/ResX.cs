@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 // The few System.Windows.Forms ResX members that dnSpy's project exporter (dnSpy.Decompiler/MSBuild/
 // ResXResourceFileWriter.cs) uses: header constants, the schema, and the reader/writer/ResXNullRef type names it
 // writes into each .resx. Windows Forms itself does not exist on Linux, and the exporter never reads or writes

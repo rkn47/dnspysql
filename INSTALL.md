@@ -1,13 +1,13 @@
-# Installing dnspysql
+# Installing DnSpySql
 
-**If you are an AI agent:** this file is everything you need to install dnspysql and connect it to your harness.
+**If you are an AI agent:** this file is everything you need to install DnSpySql and connect it to your harness.
 Follow the steps in order and run each step's **Check** before moving on. If a check fails, use the troubleshooting
 table at the end, and stop and report if it doesn't cover the case. Don't install anything that needs administrator
 rights, and don't change user-level configuration, without asking the user first; each place where that can happen
-is marked **ask**. What dnspysql can do once installed: [README.md](README.md).
+is marked **ask**. What DnSpySql can do once installed: [README.md](README.md).
 
-dnspysql only parses the assemblies it loads; it never runs them. Don't run a sample to "test" the installation
-either: the checks below use dnspysql's own engine DLL, and the tests use the benign assemblies in `tests/corpus`.
+DnSpySql only parses the assemblies it loads; it never runs them. Don't run a sample to "test" the installation
+either: the checks below use DnSpySql's own engine DLL, and the tests use the benign assemblies in `tests/corpus`.
 
 ## 0. Choose a path
 
@@ -57,7 +57,7 @@ Installing what is missing:
     `iwr https://dot.net/v1/dotnet-install.ps1 -OutFile $env:TEMP\di.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\di.ps1 -Channel 8.0 -InstallDir $env:USERPROFILE\.dotnet -NoPath`
   - Linux: `curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0` (installs to `~/.dotnet`)
 
-  dnspysql finds a per-user .NET by itself at run time (`%USERPROFILE%\.dotnet`, `%LOCALAPPDATA%\Microsoft\dotnet`,
+  DnSpySql finds a per-user .NET by itself at run time (`%USERPROFILE%\.dotnet`, `%LOCALAPPDATA%\Microsoft\dotnet`,
   `~/.dotnet`), and `build.sh` does too. For `build.cmd` and `dotnet test`, put it on `PATH` for the session only:
   `$env:PATH = "$env:USERPROFILE\.dotnet;$env:PATH"` (PowerShell), `set PATH=%USERPROFILE%\.dotnet;%PATH%` (cmd),
   `export PATH="$HOME/.dotnet:$PATH"` (bash).
@@ -110,9 +110,9 @@ build\dnspysql.exe build\engine\DnSpySql.Engine.dll --no-project --dnspy-xml off
 The first prints `dnspysql <version> (sqlite <version>)` followed by the copyright, license and credits lines. The
 second prints the load line on stderr and a count of several hundred types.
 
-### When `build\` is locked (rebuilding while dnspysql runs)
+### When `build\` is locked (rebuilding while DnSpySql runs)
 
-A running dnspysql, typically an MCP server started by an agent harness, locks `build\engine\DnSpySql.Engine.dll` on
+A running DnSpySql, typically an MCP server started by an agent harness, locks `build\engine\DnSpySql.Engine.dll` on
 Windows, and the build fails with MSB3027/MSB3021 ("being used by another process"). Don't kill that process, since
 it belongs to someone's session. Either close the client that started it, or build into another folder from a
 shell where `vcvars64.bat` has run (on Linux, the same without it):
@@ -138,7 +138,7 @@ dotnet test tests/DnSpySql.Tests
 
 ## 5. Connect to an agent harness (MCP)
 
-dnspysql serves the Model Context Protocol over stdio with `--mcp`. Use one server for all samples: start it without
+DnSpySql serves the Model Context Protocol over stdio with `--mcp`. Use one server for all samples: start it without
 an assembly, and the agent loads samples with `SELECT open('path')`. Always register the **absolute** path of the
 binary; clients start it with their own working directory.
 
@@ -183,16 +183,16 @@ The server offers `dnspysql_query` (SQL), `dnspysql_schema` and `dnspysql_guide`
 also offered as MCP prompts: basics, explore, triage, unpack, dnspy), and its instructions describe the analysis workflow.
 Useful extra arguments, placed before `--mcp`:
 
-- `--dnspy-xml off|auto|PATH`: on Windows, dnspysql keeps dnSpy's settings file in step with the breakpoints and
+- `--dnspy-xml off|auto|PATH`: on Windows, DnSpySql keeps dnSpy's settings file in step with the breakpoints and
   bookmarks it sets (default `auto`: `%APPDATA%\dnSpy\dnSpy.xml`, or the `bin\dnSpy.xml` of a running portable dnSpy).
   That edits the user's dnSpy configuration: **ask** whether they want it, and pass `--dnspy-xml off` if not.
 - `--readonly` for analysis that must not change anything;
 - `--ref DIR` for directories with referenced assemblies;
 - `--timeout MS` for a per-statement timeout.
 
-**Check:** in a new agent session, ask it to run `SELECT sqlite_version()` through dnspysql.
+**Check:** in a new agent session, ask it to run `SELECT sqlite_version()` through DnSpySql.
 
-What dnspysql writes, so the user is not surprised: once a sample is annotated, `<sample>.dnspysql.json` beside it
+What DnSpySql writes, so the user is not surprised: once a sample is annotated, `<sample>.dnspysql.json` beside it
 (`--no-project` keeps annotations in memory); the files the agent asks for (`save()`, `export_project()`,
 `bp_export()`); and `dnSpy.xml` as above. dnSpy must be closed while its `dnSpy.xml` is changed; see "Kept in step
 with dnSpy" under [Breakpoints](README.md#breakpoints) in the README.
@@ -231,7 +231,7 @@ it starts the new binary.
 
 Remove the client registration (`claude mcp remove dnspysql`, or delete the `dnspysql` entry from the client's
 configuration file), then delete the repository folder. Project files (`*.dnspysql.json`) beside analysed samples,
-and entries dnspysql added to `dnSpy.xml`, are left in place.
+and entries DnSpySql added to `dnSpy.xml`, are left in place.
 
 ## Alternative: Docker
 
@@ -257,7 +257,7 @@ lists its commands. The image is for local use only (see Binaries in [THIRD_PART
 | `dotnet-install.ps1 cannot be loaded because running scripts is disabled` | PowerShell execution policy | run it with `powershell -ExecutionPolicy Bypass -File`, as in step 1 |
 | `'cmake'` / `'ninja'` is not recognized | not installed, or installed in another shell | step 1; open a new shell after `winget` |
 | CMake: `CMakeCache.txt directory ... is different` / `does not match the source` | `build/` was generated elsewhere | move `build/` aside and rebuild |
-| `MSB3027` / `MSB3021`: `DnSpySql.Engine.dll` is being used by another process | a running dnspysql (MCP server) | [build into `build-dev`](#when-build-is-locked-rebuilding-while-dnspysql-runs) |
+| `MSB3027` / `MSB3021`: `DnSpySql.Engine.dll` is being used by another process | a running DnSpySql (MCP server) | [build into `build-dev`](#when-build-is-locked-rebuilding-while-dnspysql-runs) |
 | `MSB3021 ... Cannot create '...\sample' because a file or directory with the same name already exists` | test `bin/` copied from Linux (an apphost named `Sample`) | delete `tests/**/bin` and `tests/**/obj` |
 | `Couldn't find a valid ICU package` (Linux) | minimal distribution without ICU | **ask**, then `sudo apt install libicu-dev`, or set `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` |
 | `could not locate the .NET runtime (hostfxr)` | .NET installed in a non-standard place | set `DOTNET_ROOT` to the .NET folder (for MCP, in the server's `env`) |

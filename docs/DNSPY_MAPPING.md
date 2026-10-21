@@ -1,6 +1,6 @@
-# dnSpy → dnspysql mapping
+# dnSpy → DnSpySql mapping
 
-This document maps everything dnSpy(Ex) can **show** and everything it can **do** onto dnspysql tables, columns
+This document maps everything dnSpy(Ex) can **show** and everything it can **do** onto DnSpySql tables, columns
 and functions. The decompiler, the project exporter and
 the BAML decompiler are dnSpyEx's, vendored under `engine/vendor`. Status: ✅ implemented,
 ◐ partial, ❌ not implemented (see [Gaps](#gaps)).
@@ -12,7 +12,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 
 ### 1.1 Documents and tree (dnSpy Assembly Explorer)
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Assembly / module documents, in-memory modules | `modules`, `assemblies`, `binary` | ✅ |
 | Anti-tamper: the decrypted module (dnSpy needs the process: debug, then open the module from memory) | `untamper()`: the startup routine that decrypts them, interpreted over a copy of the image, the result opened as a module | ✅ |
@@ -36,7 +36,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 
 ### 1.2 Code
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | IL body (instructions, operands, offsets) | `il` (`WHERE method = ...` for one body; scannable across all bodies, e.g. `WHERE opcode = 'callvirt'`) | ✅ |
 | Locals (with PDB names) | `locals`, `pdb_locals` | ✅ |
@@ -48,7 +48,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 
 ### 1.3 PE / metadata / hex views
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | DOS / file / optional headers, data directories, section headers | `pe_fields` (every field with offset; writable), `pe_sections`, `pe_data_directories` | ✅ |
 | COR20 header, storage signature/header, stream headers, tables header | `pe_fields` structures `cor20_header`, `metadata_header`, `stream_header`, `tables_header` | ✅ |
@@ -70,7 +70,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 
 ### 1.4 Debug symbols
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Sequence points | `sequence_points`, `il.line` | ✅ |
 | PDB documents, embedded source | `pdb_documents` (`embedded_source`) | ✅ |
@@ -79,7 +79,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 
 ### 1.5 Resources
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Manifest resources (embedded / linked / assembly-linked), raw data | `resources` (`data`, `sniffed_type`, `text`, `sha256`) | ✅ |
 | `.resources` elements (strings, primitives, byte[], streams, serialized) | `resource_elements` | ✅ |
@@ -89,7 +89,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 
 ### 1.6 Decompiler
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | C# decompilation of type/member | `pseudocode` (one row, exact text), `decompile(handle)`: dnSpy's own engine, so the text (and its line numbers) is what dnSpy shows | ✅ |
 | VB decompilation | `decompile(handle, 'vb')`, `pseudocode*` with `language = 'vb'` (line ↔ IL mapping and references too), `decompile_module(m, 'vb')`; setting `decompiler_language` | ✅ |
@@ -131,7 +131,7 @@ Raw form: `xrefs` (every call/field/type/token/string reference), `call_edges`, 
 
 ### 1.8 Search
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Search window (type/method/field/property/event/param/local/resource/resource element/asm/module/namespace/literal/number/string) | `search WHERE query = … [AND kind = …] [AND match_mode = 'contains'\|'exact'\|'word'\|'regex'] [AND case_sensitive = 1]` | ✅ (`/re/` regex, multi-term AND) |
 | String References window (IL, constants, attribute args) | `string_refs` | ✅ |
@@ -139,7 +139,7 @@ Raw form: `xrefs` (every call/field/type/token/string reference), `call_edges`, 
 
 ### 1.9 User data
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Bookmarks | `bookmarks` (persisted in the project file; `bp_export()` writes them to dnSpy's Bookmarks window, `bp_import()` reads them) | ✅ |
 | Comments (not in dnSpy) | `comments`, `pseudocode_lines.comment`; `save()` writes them as an XML documentation file that dnSpy shows as `///` comments | ✅ |
@@ -150,11 +150,11 @@ Raw form: `xrefs` (every call/field/type/token/string reference), `call_edges`, 
 
 ### 1.10 Breakpoint windows (configuration only)
 
-dnspysql deliberately does not run, attach to or inspect processes. It covers the *configuration* side of dnSpy's
+DnSpySql deliberately does not run, attach to or inspect processes. It covers the *configuration* side of dnSpy's
 debugger, which can be prepared statically and handed to dnSpy, and it can write breakpoints into the assembly so that
 any debugger stops there.
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Breakpoints window: code breakpoints (location, enabled, labels) | `breakpoints` (`method`, `offset`, `idx`, `instruction`, `document`, `line`, `status`) | ✅ |
 | Breakpoint settings: condition (IsTrue / WhenChanged), hit count (Equals / MultipleOf / GreaterThanOrEquals), filter | `breakpoints.condition`, `condition_kind`, `hit_count`, `hit_count_kind`, `filter` | ✅ |
@@ -175,7 +175,7 @@ any debugger stops there.
 
 ### 2.1 Assembly / module
 
-| dnSpy command | dnspysql | |
+| dnSpy command | DnSpySql | |
 |---|---|---|
 | Edit Assembly (name, version, culture, public key, hash alg, flags) | `UPDATE assemblies SET …` (rename fixes AssemblyRefs like dnSpy) | ✅ |
 | Edit Module (name, MVID, kind, runtime version, machine, characteristics, COR20 flags, entry point) | `UPDATE modules SET …` | ✅ |
@@ -185,14 +185,14 @@ any debugger stops there.
 
 ### 2.2 Namespaces
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Rename Namespace / Move to empty namespace | `rename_namespace(old, new)` (TypeRef fix-ups) | ✅ |
 | Delete Namespace | `delete_namespace(ns)` | ✅ |
 
 ### 2.3 Types and members
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Create Type / Nested Type (kind presets) | `INSERT INTO types(namespace, name[, declaring_type, kind, base_type_name, visibility])` | ✅ |
 | Edit Type (name, ns, kind, visibility, layout, sealed/abstract/serializable, base type, packing/size, flags) | `UPDATE types SET …` (TypeRef fix-ups) | ✅ |
@@ -215,7 +215,7 @@ any debugger stops there.
 
 ### 2.4 Method bodies (IL editor)
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Edit IL Instructions (opcode, operand of every kind) | `UPDATE il SET opcode/operand`, `il_set()` | ✅ |
 | Insert / remove instructions (branch retargeting) | `INSERT INTO il`, `DELETE FROM il`, `il_insert()`, `il_remove()` | ✅ |
@@ -232,7 +232,7 @@ any debugger stops there.
 
 ### 2.5 C# compiler (Roslyn)
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Edit Method (C#) | `compile_method(m, 'C# method declaration')` — private access, lambdas, iterators/async (generated types are cloned) | ✅ |
 | Add Class Members (C#) | `add_members(type, 'C# members')` | ✅ |
@@ -244,7 +244,7 @@ any debugger stops there.
 
 ### 2.6 Resources
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Create file resource / Edit (name, visibility, data) / Delete | `INSERT/UPDATE/DELETE resources` | ✅ |
 | Create multi-file (.resources) resource | `INSERT INTO resources(name, data) VALUES (…, resource_set_empty())` | ✅ |
@@ -255,7 +255,7 @@ any debugger stops there.
 
 ### 2.7 Hex / raw metadata
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Hex editor writes | `UPDATE file_bytes`, `patch_bytes()`, `save_raw()` | ✅ |
 | Edit header fields | `UPDATE pe_fields SET value` | ✅ |
@@ -264,7 +264,7 @@ any debugger stops there.
 
 ### 2.8 Save
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Save Module (preserve tokens, keep max stack, PDB, mixed-mode native writer) | `save([module,] path)`, setting `save_preserve_tokens` | ✅ |
 | Full writer options dialog (PE headers, metadata header, heaps, RID options) | — | ◐ |
@@ -272,7 +272,7 @@ any debugger stops there.
 
 ### 2.9 Breakpoint actions
 
-| dnSpy | dnspysql | |
+| dnSpy | DnSpySql | |
 |---|---|---|
 | Toggle Breakpoint (F9) on an IL instruction / C# statement | `bp_toggle(method, offset)`, `bp_set_decompiled(handle, line)` | ✅ |
 | Breakpoint Settings dialog (condition, hit count, filter, actions/tracepoint, labels) | `UPDATE breakpoints SET ...` | ✅ |
@@ -284,7 +284,7 @@ any debugger stops there.
 
 ## 3. Conventions shared with other SQL-over-binary tools
 
-| Convention | dnspysql |
+| Convention | DnSpySql |
 |---|---|
 | `binary` key/value with canonical keys (summary, tool_name, processor, filetype, image_base, entry_point, is_64bit, bits, md5, sha256 …) | ✅ (+ module/assembly/mvid/tfm keys) |
 | `runtime_settings` (UPDATE value), `sql_capabilities` feature matrix, `transactions` undo journal | ✅ |
@@ -300,7 +300,7 @@ any debugger stops there.
 
 ## Gaps
 
-Prioritised list of what dnSpy can do that dnspysql cannot yet:
+Prioritised list of what dnSpy can do that DnSpySql cannot yet:
 
 Out of scope by design: running, attaching to or inspecting processes (dnSpy's debugger engine). Breakpoints are
 configured here and executed by dnSpy.

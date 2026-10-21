@@ -1,6 +1,6 @@
 #!/bin/sh
-# dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
-# Configure and build dnspysql (Release) with the system C++ compiler + Ninja into ./build, then regenerate
+# DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+# Configure and build DnSpySql (Release) with the system C++ compiler + Ninja into ./build, then regenerate
 # docs/SCHEMA.md from the live catalog.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)

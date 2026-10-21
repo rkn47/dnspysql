@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -36,7 +36,7 @@ using namespace dnspysql;
 namespace {
 
 const char* kUsage =
-    "dnspysql - SQL over .NET assemblies (dnSpy's model as tables)\n"
+    "DnSpySql - SQL over .NET assemblies (dnSpy's model as tables)\n"
     "\n"
     "usage: dnspysql [options] <assembly|module|exe>...\n"
     "\n"
@@ -48,7 +48,7 @@ const char* kUsage =
     "      --bind ADDR       HTTP bind address (default 127.0.0.1; use 0.0.0.0 in containers)\n"
     "      --token TOKEN     require 'Authorization: Bearer TOKEN' (or X-XSQL-Token) on HTTP\n"
     "      --mcp             serve the Model Context Protocol over stdio\n"
-    "      --remote URL      send -c/-f SQL to a running dnspysql HTTP server instead (uses --token, --format)\n"
+    "      --remote URL      send -c/-f SQL to a running DnSpySql HTTP server instead (uses --token, --format)\n"
     "      --ref DIR         extra directory with referenced assemblies (repeatable; e.g. .NET Framework refs on Linux)\n"
     "      --readonly        refuse every write (tables and functions)\n"
     "      --project PATH    annotation store (default: <first input>.dnspysql.json)\n"
@@ -262,7 +262,7 @@ struct Shell {
     }
 
     void run(size_t modules) {
-        std::cerr << "dnspysql " << kVersion << " (" << kCommit << ") - " << modules << " module(s) loaded. .help for help, .quit to exit\n";
+        std::cerr << "DnSpySql " << kVersion << " (" << kCommit << ") - " << modules << " module(s) loaded. .help for help, .quit to exit\n";
         CtrlC ctrl([this] { runner.interrupt(); });
         std::string buffer, line;
         for (;;) {
@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
         try {
             if (a == "-h" || a == "--help" || a == "/?") { std::cout << kUsage; return 0; }
             if (a == "--version") {
-                std::cout << "dnspysql " << kVersion << " (commit " << kCommit << ", sqlite " << sqlite3_libversion() << ")\n"
+                std::cout << "DnSpySql " << kVersion << " (commit " << kCommit << ", sqlite " << sqlite3_libversion() << ")\n"
                           << "Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms (LICENSE, NOTICE); no warranty.\n"
                           << "Built on dnlib, dnSpyEx's decompiler and libxsql by Elias Bachaalany (https://github.com/0xeb/libxsql).\n"
                           << "See THIRD_PARTY_NOTICES.md.\n";

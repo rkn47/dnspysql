@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 // HTTP API (idasql / ghidrasql shape) and the --remote client.
 //   POST /query  raw SQL body, or JSON {sql, continue_on_error, include_sql, max_rows}  [?format=json|text|csv|tsv]
 //   GET /status, GET /health, GET /schema, POST /cancel, POST /shutdown
@@ -34,7 +34,7 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Sends each -c/-f script to a running dnspysql HTTP server and prints the answer. Exit code as for local runs:
+// Sends each -c/-f script to a running DnSpySql HTTP server and prints the answer. Exit code as for local runs:
 // 0 ok, 1 a statement failed, 3 the server cannot be reached.
 int run_remote(const std::string& url, const std::string& token, const std::string& format,
                const std::vector<std::string>& scripts, bool continue_on_error);

@@ -1,4 +1,4 @@
-﻿// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+﻿// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Functions;
 using DnSpySql.Sql;
 using dnlib.DotNet;
@@ -163,7 +163,7 @@ public static class BreakpointTables
         var ws = s.Ws;
         s.Fn("bp_set", 1, 3, a =>
         {
-            // bp_set(token, offset, module) is the older dnspysql form: an integer third argument names the module.
+            // bp_set(token, offset, module) is the older DnSpySql form: an integer third argument names the module.
             var h = a.Length > 2 && a[2] is long mod ? Handle.Make((int)mod, (uint)Lng(a[0], "method"))
                 : ws.HandleArg(a[0]) ?? throw new SqlException("method is required");
             var rec = SetBreakpoint(s, h, Values.ToLong(a.Arg(1)), out var existed);
@@ -228,7 +228,7 @@ public static class BreakpointTables
 
         s.Fn("bp_clear", 0, 1, a =>
         {
-            // An integer argument is a module id (older dnspysql form), text a label.
+            // An integer argument is a module id (older DnSpySql form), text a label.
             var mod = a.Arg(0) is long id ? ws.Get((int)id) : null;
             var label = mod == null ? Values.ToText(a.Arg(0)) : null;
             var victims = s.Store.Breakpoints.Where(b => (label == null || HasLabel(b, label)) && (mod == null || ModuleOfBp(s, b) == mod)).ToList();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+# DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 """Regenerates the table list in README.md (section "Schema", from "Every table and view, by area" to "### Conventions")
 from the live catalog of a built dnspysql, so the README cannot drift from the code.
 
@@ -36,7 +36,7 @@ SHORT = {
     "user_strings": "The `#US` heap: every `ldstr` literal of the module",
     "callers": "Who calls a method (`WHERE method = ...`), also through a base or interface method it overrides or implements (`via`)",
     "dispatch_calls": "Virtual calls that can reach a method through a base or interface method it overrides or implements (dnSpy's Virtual Used By)",
-    "dnspysql_guides": "How to use dnspysql, one guide per workflow (basics, explore, triage, unpack, dnspy); the MCP server offers them as prompts",
+    "dnspysql_guides": "How to use DnSpySql, one guide per workflow (basics, explore, triage, unpack, dnspy); the MCP server offers them as prompts",
     "embedded_pes": "PE files inside a module: in its file bytes (overlay, sections), in resources and `.resources` entries, also compressed or split across numbered resources",
     "callees": "What a method calls (`WHERE method = ...`); external callees have `callee = 0`",
     "entry_points": "Managed entry points, module initializers and static constructors of every module",

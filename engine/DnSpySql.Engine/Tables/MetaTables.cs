@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Sql;
 using dnlib.DotNet;
 using dnlib.PE;
@@ -174,7 +174,7 @@ public static class MetaTables
         IEnumerable<(string name, VirtualTable? t, string doc)> Entries() =>
             db.Tables.Select(t => (t.Name, (VirtualTable?)t, t.Doc)).Concat(Views.All.Select(v => (v.name, (VirtualTable?)null, v.doc)));
 
-        db.Register(new Table<(string name, VirtualTable? t, string doc)>("dnspysql_tables", "Catalog of dnspysql tables and views") { Domain = "meta" }
+        db.Register(new Table<(string name, VirtualTable? t, string doc)>("dnspysql_tables", "Catalog of DnSpySql tables and views") { Domain = "meta" }
             .Source(_ => Entries())
             .Text("table_name", r => r.name, pushdown: Pushdown.Eq)
             .Text("domain", r => r.t?.Domain ?? Views.Domain)
@@ -186,7 +186,7 @@ public static class MetaTables
             .Text("pushdown_columns", r => r.t is { } t ? string.Join(",", t.Columns.Where(c => c.Pushdown != Pushdown.None).Select(c => c.Name)) : "")
             .Text("kind", r => r.t == null ? "view" : "table"));
 
-        db.Register(new Table<(string table, ColumnInfo? c, string viewType, string name, int i)>("dnspysql_columns", "Catalog of dnspysql columns (tables and views)") { Domain = "meta" }
+        db.Register(new Table<(string table, ColumnInfo? c, string viewType, string name, int i)>("dnspysql_columns", "Catalog of DnSpySql columns (tables and views)") { Domain = "meta" }
             .Source(c => Entries().Where(e => c.Text("table_name") is not string n || string.Equals(e.name, n, StringComparison.OrdinalIgnoreCase))
                 .SelectMany(e => e.t != null
                     ? e.t.Columns.Select((col, i) => (e.name, (ColumnInfo?)col, "", col.Name, i))
@@ -203,7 +203,7 @@ public static class MetaTables
             .Text("description", r => r.c?.Doc));
 
         // SQLite registers a function once per argument count; the catalog lists each function once
-        db.Register(new Table<(FunctionInfo F, int Min, int Max)>("dnspysql_functions", "Catalog of dnspysql SQL functions") { Domain = "meta" }
+        db.Register(new Table<(FunctionInfo F, int Min, int Max)>("dnspysql_functions", "Catalog of DnSpySql SQL functions") { Domain = "meta" }
             .Source(_ => db.Functions.GroupBy(f => f.Name).Select(g => (g.First(), g.Min(f => f.Args), g.Max(f => f.Args)))
                 .OrderBy(x => x.Item1.Domain).ThenBy(x => x.Item1.Name))
             .Text("name", x => x.F.Name, pushdown: Pushdown.Eq)
@@ -341,7 +341,7 @@ public static class MetaTables
         yield return ("feature.search", "yes", "search(), jump_entities, byte_search");
         yield return ("feature.annotations", s.Store.Path != null ? "yes" : "memory", "comments, bookmarks, tags, kv, breakpoints (project file)");
         yield return ("feature.breakpoints", "yes", "breakpoints, module_breakpoints, exception_settings (dnSpy breakpoint configuration by IL offset, source line or decompiled line; exportable to dnSpy)");
-        yield return ("feature.process_debugging", "no", "by design: dnspysql configures breakpoints, it does not run or attach to processes");
+        yield return ("feature.process_debugging", "no", "by design: DnSpySql configures breakpoints, it does not run or attach to processes");
         yield return ("feature.runtime_settings", "yes", "runtime_settings table");
         yield return ("feature.undo", "yes", "transactions table, undo(n)/redo(n)");
     }

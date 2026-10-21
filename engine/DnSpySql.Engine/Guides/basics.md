@@ -1,12 +1,12 @@
-# dnspysql basics
+# DnSpySql basics
 
-dnspysql exposes .NET assemblies as SQLite tables through dnSpy's engine (dnlib + dnSpyEx's decompiler): metadata, IL,
+DnSpySql exposes .NET assemblies as SQLite tables through dnSpy's engine (dnlib + dnSpyEx's decompiler): metadata, IL,
 cross-references, dnSpy's Analyzer, decompiled C# with its line-to-IL mapping, resources, PE bytes, PDB data, triage
 tables and dnSpy's breakpoint configuration. Other guides: `SELECT topic, title FROM dnspysql_guides`.
 
 ## Rules
 
-- Never execute the assembly or anything decoded from it. dnspysql only parses; its IL interpreter (`emulate`,
+- Never execute the assembly or anything decoded from it. DnSpySql only parses; its IL interpreter (`emulate`,
   `decryptor_calls`, `untamper`) computes results without running sample code. Never contact URLs or hosts found in a
   sample, and defang them in reports (`hxxps://evil[.]com`).
 - Work on a copy. Annotations are saved to `<first input>.dnspysql.json`; `save()` writes to the path you give, so

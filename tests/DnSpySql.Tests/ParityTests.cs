@@ -1,12 +1,12 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Reflection;
 using System.Runtime.Loader;
 
 namespace DnSpySql.Tests;
 
 /// <summary>
-/// The parity suite: fixed SQL against SampleTarget with known expected values, through a live dnspysql session. Where an expectation depends on
-/// the decompiler's exact output, dnSpy's engine is what dnspysql runs, so the expected text is dnSpy's (noted).
+/// The parity suite: fixed SQL against SampleTarget with known expected values, through a live DnSpySql session. Where an expectation depends on
+/// the decompiler's exact output, dnSpy's engine is what DnSpySql runs, so the expected text is dnSpy's (noted).
 /// </summary>
 public sealed class ParityTests : IDisposable
 {

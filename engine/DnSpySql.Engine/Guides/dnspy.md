@@ -1,6 +1,6 @@
 # Handing results to dnSpy
 
-dnspysql never runs or debugs anything: it prepares what dnSpy shows and where it stops.
+DnSpySql never runs or debugs anything: it prepares what dnSpy shows and where it stops.
 
 | what | reaches dnSpy through |
 |---|---|

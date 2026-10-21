@@ -1,4 +1,4 @@
-# dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+# DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 # dnspysql: SQL over .NET assemblies, as a sandbox-friendly image.
 #   docker build -t dnspysql .
 #   docker run --rm --network none -v "$PWD:/samples:ro" dnspysql /samples/app.dll -c "SELECT count(*) FROM types"

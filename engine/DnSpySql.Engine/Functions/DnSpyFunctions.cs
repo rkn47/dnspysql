@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Sql;
 using DnSpySql.Tables;
 using dnlib.DotNet;
@@ -7,7 +7,7 @@ using static DnSpySql.Tables.TableKit;
 namespace DnSpySql.Functions;
 
 /// <summary>
-/// Functions dnspysql had before its current schema, kept under their names: the older calling convention
+/// Functions DnSpySql had before its current schema, kept under their names: the older calling convention
 /// (token plus an optional module id, where the current functions take a handle) and the edits built on the type splicer.
 /// </summary>
 public static class DnSpyFunctions

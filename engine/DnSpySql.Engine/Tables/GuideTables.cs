@@ -1,10 +1,10 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Sql;
 
 namespace DnSpySql.Tables;
 
 /// <summary>
-/// How to use dnspysql, from inside it: the workflow guides (Guides/*.md, embedded in the engine) as rows, so any
+/// How to use DnSpySql, from inside it: the workflow guides (Guides/*.md, embedded in the engine) as rows, so any
 /// front end can read them with SQL and the MCP server can offer them as prompts.
 /// </summary>
 public static class GuideTables
@@ -43,7 +43,7 @@ public static class GuideTables
     public static void Register(Session s)
     {
         s.Db.Register(new Table<Guide>("dnspysql_guides",
-                "How to use dnspysql, for people and agents: one guide per workflow (basics, explore, triage, unpack, dnspy). " +
+                "How to use DnSpySql, for people and agents: one guide per workflow (basics, explore, triage, unpack, dnspy). " +
                 "SELECT text FROM dnspysql_guides WHERE topic = 'basics'; the MCP server offers the same guides as prompts") { Domain = "meta" }
             .Source(c => c.Text("topic") is string t ? All.Where(g => g.Topic == t) : All)
             .Text("topic", g => g.Topic, pushdown: Pushdown.Eq)

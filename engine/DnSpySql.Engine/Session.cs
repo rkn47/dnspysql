@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Tables;
 using DnSpySql.Sql;
 
@@ -18,11 +18,11 @@ public sealed class SessionOptions
     public string? DnSpyXml { get; set; }
 }
 
-/// <summary>A dnspysql session: workspace + services; SQLite itself lives in the native host.</summary>
+/// <summary>A DnSpySql session: workspace + services; SQLite itself lives in the native host.</summary>
 public sealed class Session : IDisposable
 {
     public const string ToolName = "dnspysql";
-    /// <summary>The dnspysql version, as the native host reports it at init.</summary>
+    /// <summary>The DnSpySql version, as the native host reports it at init.</summary>
     public static string ToolVersion { get; set; } = typeof(Session).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
     /// <summary>The commit the host was built from (git describe), so a stale build shows in the binary table.</summary>
     public static string? ToolCommit { get; set; }

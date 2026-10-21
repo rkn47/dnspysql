@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Text.Json;
 
 namespace DnSpySql.Tests;
@@ -81,7 +81,7 @@ public sealed class TriageTests : SampleTest
                     "select count(*) from dnspysql_guides where topic = 'nope'");
         Assert.Equal(["basics", "explore", "triage", "unpack", "dnspy"], r.Rows(0).Select(x => x.GetProperty("topic").GetString()));
         Assert.All(r.Rows(0), x => Assert.True(x.GetProperty("n").GetInt64() > 500));
-        Assert.StartsWith("# dnspysql basics", r.Text(1));
+        Assert.StartsWith("# DnSpySql basics", r.Text(1));
         Assert.Equal(0, r.Long(2));
     }
 

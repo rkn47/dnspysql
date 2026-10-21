@@ -1,6 +1,6 @@
 <div align="center">
 
-# dnspysql
+# DnSpySql
 
 **Query, patch and annotate .NET assemblies with SQL, using dnSpy's own engine.**
 
@@ -13,7 +13,7 @@
 
 </div>
 
-dnspysql loads assemblies with [dnlib](https://github.com/0xd4d/dnlib), decompiles them with
+DnSpySql loads assemblies with [dnlib](https://github.com/0xd4d/dnlib), decompiles them with
 [dnSpyEx's decompiler](https://github.com/dnSpyEx/dnSpy) (a dnlib-backed fork of ILSpy), and exposes everything dnSpy
 shows as SQLite virtual tables.
 
@@ -30,7 +30,7 @@ shows as SQLite virtual tables.
 > This project includes implementation work substantially informed by libxsql, idasql and ghidrasql by Elias
 > Bachaalany: [libxsql](https://github.com/0xeb/libxsql) is its SQL layer, used unmodified, and the idea of querying a
 > reverse-engineering database with SQL, with several of its conventions, comes from idasql and ghidrasql. No code is
-> copied from them; dnspysql was written with AI assistance, and is not affiliated with or endorsed by their author.
+> copied from them; DnSpySql was written with AI assistance, and is not affiliated with or endorsed by their author.
 > Details and licenses are under [Credits](#credits-and-third-party-software).
 
 ```bash
@@ -43,7 +43,7 @@ dnspysql App.dll -c "SELECT bp_set(resolve('App.License::IsValid'))" -c "SELECT 
 ```
 
 > [!IMPORTANT]
-> **Safety.** dnspysql parses the files it loads and never runs them, nor anything decoded from them (`open_bytes`,
+> **Safety.** DnSpySql parses the files it loads and never runs them, nor anything decoded from them (`open_bytes`,
 > `untamper`, `embedded_pes`). The IL interpreter behind `decryptor_calls`, `field_inits`, `emulate()` and `untamper()`
 > computes results itself and never runs sample code: calls into the framework are limited to an allowlist of
 > in-memory computation, and P/Invoke, files, the registry and the network stop it ([details](#the-il-interpreter)).
@@ -77,7 +77,7 @@ exporter.
 
 > Step by step, with checks and troubleshooting (also written for AI agents): **[INSTALL.md](INSTALL.md)**.
 
-dnspysql builds and runs on **Windows x64** and **Linux x64**. Both need CMake ≥ 3.20, Ninja and the .NET 8 SDK.
+DnSpySql builds and runs on **Windows x64** and **Linux x64**. Both need CMake ≥ 3.20, Ninja and the .NET 8 SDK.
 
 <table>
 <tr><th>Windows</th><th>Linux</th></tr>
@@ -138,7 +138,7 @@ dotnet test tests/DnSpySql.Tests
 ```
 
 The tests run the built binary end to end (set `DNSPYSQL` to test another build): the parity suite against
-`tests/corpus/SampleTarget`, dnspysql's cases against `tests/corpus/Sample`, and the CLI, REPL, HTTP, `--remote` and
+`tests/corpus/SampleTarget`, DnSpySql's cases against `tests/corpus/Sample`, and the CLI, REPL, HTTP, `--remote` and
 MCP front ends.
 
 ## Quick start
@@ -164,7 +164,7 @@ SELECT decompile(resolve('Sample.MemberCard::IsValid'));
 `-c "SQL"` runs one statement and exits instead, and `--format json` gives machine-readable output.
 
 > [!TIP]
-> To use dnspysql from an AI agent, register it as an MCP server
+> To use DnSpySql from an AI agent, register it as an MCP server
 > ([INSTALL.md](INSTALL.md#5-connect-to-an-agent-harness-mcp)); the agent then loads samples with
 > `SELECT open('path')`.
 
@@ -186,7 +186,7 @@ dnspysql [options] <assembly|module|exe>...
 | `--bind ADDR` | HTTP bind address (default 127.0.0.1; use 0.0.0.0 in containers) |
 | `--token TOKEN` | require `Authorization: Bearer TOKEN` (or `X-XSQL-Token`) on HTTP |
 | `--mcp` | serve the Model Context Protocol over stdio |
-| `--remote URL` | send `-c`/`-f` SQL to a running dnspysql HTTP server instead (uses `--token`, `--format`) |
+| `--remote URL` | send `-c`/`-f` SQL to a running DnSpySql HTTP server instead (uses `--token`, `--format`) |
 | `--ref DIR` | extra directory with referenced assemblies (repeatable; e.g. .NET Framework refs on Linux) |
 | `--readonly` | refuse every write (tables and functions) |
 | `--project PATH` | annotation store (default: `<first input>.dnspysql.json`) |
@@ -239,10 +239,10 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 | `assemblies` | UPDATE | AssemblyDef rows (identity of each loaded assembly) |
 | `binary` |  | Key/value summary of the session's primary module (canonical keys) |
 | `bundle_entries` |  | Files inside a .NET single-file bundle the module was opened from; `open_bundle_entry(path)` loads an embedded assembly |
-| `dnspysql_columns` |  | Catalog of dnspysql columns (tables and views) |
-| `dnspysql_functions` |  | Catalog of dnspysql SQL functions |
-| `dnspysql_guides` |  | How to use dnspysql, one guide per workflow (basics, explore, triage, unpack, dnspy); the MCP server offers them as prompts |
-| `dnspysql_tables` |  | Catalog of dnspysql tables and views |
+| `dnspysql_columns` |  | Catalog of DnSpySql columns (tables and views) |
+| `dnspysql_functions` |  | Catalog of DnSpySql SQL functions |
+| `dnspysql_guides` |  | How to use DnSpySql, one guide per workflow (basics, explore, triage, unpack, dnspy); the MCP server offers them as prompts |
+| `dnspysql_tables` |  | Catalog of DnSpySql tables and views |
 | `exported_types` |  | ExportedType rows (type forwarders and multi-module exports) |
 | `files` |  | File table rows (multi-file assembly members) |
 | `modrefs` | UPDATE | ModuleRef rows (native DLLs and netmodules referenced) |
@@ -455,7 +455,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
   `exception_handlers`, `blocks` and `cfg_edges` take a `method` filter but also scan every body.
 - **Undo.** Writes are journaled per statement: `undo(n)`, `redo(n)`, the `transactions` table; `--readonly`
   refuses them.
-- **Compatibility.** The names of earlier dnspysql versions still work: `refs` and `attributes` are views, and older
+- **Compatibility.** The names of earlier DnSpySql versions still work: `refs` and `attributes` are views, and older
   column names (`method_token`, `type_token`, `il_size`, ...) are extra columns. `params.seq` is now the ECMA
   sequence number (0 = return value); the 0-based argument position is `params.arg_index`.
 
@@ -480,7 +480,7 @@ By area; signatures are in [docs/SCHEMA.md](docs/SCHEMA.md).
 
 ### Breakpoints
 
-dnspysql is not a debugger and never runs the code it loads. You choose breakpoint locations with SQL (IL offset, PDB
+DnSpySql is not a debugger and never runs the code it loads. You choose breakpoint locations with SQL (IL offset, PDB
 source line, or a line of the decompiled C#) and hand them to a debugger in one of two ways.
 
 **`bp_patch()` + `save()`** writes `if (Debugger.IsAttached) Debugger.Break();` in front of each breakpoint's
@@ -491,7 +491,7 @@ a condition, hit count, filter or trace message can't be expressed this way, so 
 **`bp_export(path)`** hands them to dnSpy, with the condition, hit count, filter, tracepoint and labels, plus the
 bookmarks, module breakpoints and exception settings:
 
-- Given dnSpy's own settings file, it merges into it: an entry at the same location as one of dnspysql's is replaced,
+- Given dnSpy's own settings file, it merges into it: an entry at the same location as one of DnSpySql's is replaced,
   and everything else, including breakpoints and bookmarks set in dnSpy, is kept. Close dnSpy first, since it
   rewrites `dnSpy.xml` when it exits; where the file is: [Kept in step with dnSpy](#kept-in-step-with-dnspy).
 - Given a new path, it writes a file that dnSpy loads from Breakpoints window > Import (and Bookmarks window >
@@ -731,7 +731,7 @@ FROM types;
 
 - **Wiped headers.** Some samples destroy the CLI header while the metadata itself is intact, and native-stub
   protectors also wipe the metadata root's `BSJB` signature and stream names (restoring them in memory at startup).
-  When a file fails to load for that reason, dnspysql finds the metadata root (by its signature or its runtime
+  When a file fails to load for that reason, DnSpySql finds the metadata root (by its signature or its runtime
   version string), names its streams by their content, drops decoy streams, rebuilds the header in memory, and
   records what it did in `modules.repair` and `binary.anomalies`. Managed resources and a valid entry point are kept
   from the old header; otherwise the entry point is unknown.
@@ -742,13 +742,13 @@ FROM types;
   table is not counted. `SELECT read_bytes(overlay_offset, overlay_size) FROM modules WHERE overlay_size > 0` returns
   the data itself.
 - **Single-file apps.** A .NET single-file app (`PublishSingleFile`: framework-dependent, self-contained or
-  compressed) opens from its app host, Windows PE or Linux ELF. dnspysql reads the bundle manifest, loads the app's
+  compressed) opens from its app host, Windows PE or Linux ELF. DnSpySql reads the bundle manifest, loads the app's
   own assembly as the module, and lists everything the host carries in `bundle_entries` (path, kind, offset, size,
   compressed size). `SELECT open_bundle_entry('Lib.dll')` loads another embedded assembly as a further module; the
   bundled runtime's own assemblies are left to the shared framework.
 - **Framework references** are resolved the way dnSpy resolves them: the assembly's own directory, then the .NET
   Framework (the GAC on Windows; on Linux the reference assemblies `build.sh` bundles, or Mono's), then the .NET
-  shared frameworks of the runtime dnspysql runs on. Decompiler transforms such as `async`/`await` reconstruction
+  shared frameworks of the runtime DnSpySql runs on. Decompiler transforms such as `async`/`await` reconstruction
   need those types, so without them a .NET (Core) assembly would show raw compiler state machines.
 
 `SELECT value FROM binary WHERE key = 'anomalies'` lists everything above that looks like a protector or packer: wiped
@@ -758,7 +758,7 @@ imports and overlays.
 > [!CAUTION]
 > Files next to a sample are input too. dnSpy's decompiler and `api_docs` read the XML documentation next to an
 > assembly, and dnSpyEx follows a `redirect` in it to any path, including a network share, which would send the
-> analyst's credentials to whoever planted it. dnspysql ignores a neighbouring `.xml` that redirects to a rooted path
+> analyst's credentials to whoever planted it. DnSpySql ignores a neighbouring `.xml` that redirects to a rooted path
 > or declares a DTD; the documentation then comes from the reference packs, or there is none. Likewise a reference
 > whose name is a path (`\\host\share\x`, `..\x`) is never resolved, since the resolver would probe it as a file.
 
@@ -805,13 +805,13 @@ the decompiler) together. Measurements are in [docs/BENCHMARKS.md](docs/BENCHMAR
 ## Credits and third-party software
 
 - **libxsql** by Elias Bachaalany (https://github.com/0xeb/libxsql) is an unmodified library dependency under the
-  Human-Origin Source License v1.0; dnspysql does not copy, modify or port its code.
+  Human-Origin Source License v1.0; DnSpySql does not copy, modify or port its code.
 - **dnSpyEx** (https://github.com/dnSpyEx/dnSpy) is vendored as the git submodule `external/dnSpyEx`, used
   unmodified, for its dnlib-backed decompiler, its project exporter and its BAML decompiler. It is licensed under the
-  **GPL, version 3 or later**, which is why dnspysql is GPL-licensed too.
+  **GPL, version 3 or later**, which is why DnSpySql is GPL-licensed too.
 
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every component and its license, which dnSpyEx sources are
-compiled, and what the AI that helped write dnspysql read of the projects credited at the top of this README.
+compiled, and what the AI that helped write DnSpySql read of the projects credited at the top of this README.
 
 ## Contributing
 
@@ -826,7 +826,7 @@ Issues and pull requests are welcome. Before you start:
 - A schema change regenerates `docs/SCHEMA.md` (the build does it) and the table list in this README
   (`python tools/docs/readme_tables.py --exe build/dnspysql`); existing table, column and function names keep
   working.
-- dnspysql stays generic: tables, file formats and the interpreter's CLR semantics, not a deobfuscator for one
+- DnSpySql stays generic: tables, file formats and the interpreter's CLR semantics, not a deobfuscator for one
   protector or a config extractor for one malware family. Naming a protector in `protections` is identification and
   is fine.
 - New source files start with the license header the existing ones carry, and contributions are under the same
@@ -834,14 +834,14 @@ Issues and pull requests are welcome. Before you start:
 
 ## License
 
-dnspysql — Copyright (C) 2026 Rakan Alduwaysan — is licensed under the GNU GPL, version 3 only ([LICENSE](LICENSE)),
+DnSpySql — Copyright (C) 2026 Rakan Alduwaysan — is licensed under the GNU GPL, version 3 only ([LICENSE](LICENSE)),
 with the additional terms that section 7 of the GPL permits ([NOTICE](NOTICE)): keep the author attribution, do not
-misrepresent the origin, mark modified versions as modified, and do not use the dnspysql name or the author's name to
+misrepresent the origin, mark modified versions as modified, and do not use the DnSpySql name or the author's name to
 promote derived works. Third-party components keep their own licenses
 ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
 > [!IMPORTANT]
 > This repository is source only. A build runs dnSpyEx's GPL code and libxsql, whose license is not the GPL, in one
-> process: [NOTICE](NOTICE) gives the additional permission that lets dnspysql's own code be combined with libxsql,
-> but dnSpyEx's license has no such permission, so build dnspysql for your own use and do not hand out binaries or
+> process: [NOTICE](NOTICE) gives the additional permission that lets DnSpySql's own code be combined with libxsql,
+> but dnSpyEx's license has no such permission, so build DnSpySql for your own use and do not hand out binaries or
 > images built from it until that is resolved ([THIRD_PARTY_NOTICES.md, Binaries](THIRD_PARTY_NOTICES.md#binaries)).

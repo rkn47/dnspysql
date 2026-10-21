@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 // dnSpy's decompilers (CSharpDecompiler, ILDecompiler) and their settings types
 // are `internal`. The engine drives them directly, so access is granted here
 // rather than by patching the vendored dnSpyEx source.

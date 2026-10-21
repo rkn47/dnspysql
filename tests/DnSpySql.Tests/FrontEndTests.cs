@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
@@ -33,7 +33,7 @@ public sealed class FrontEndTests : SampleTest
     {
         var (exit, stdout, _) = Exec("--version");
         Assert.Equal(0, exit);
-        var m = System.Text.RegularExpressions.Regex.Match(stdout, @"^dnspysql (\d+\.\d+\.\d+) \(commit ([0-9a-f]{7,}(-dirty)?|unknown), sqlite ");
+        var m = System.Text.RegularExpressions.Regex.Match(stdout, @"^DnSpySql (\d+\.\d+\.\d+) \(commit ([0-9a-f]{7,}(-dirty)?|unknown), sqlite ");
         Assert.True(m.Success, stdout);
         var r = Run("select value from binary where key = 'tool_version'", "select value from binary where key = 'tool_commit'");
         Assert.Equal(m.Groups[1].Value, r.Text(0));
@@ -241,7 +241,7 @@ public sealed class FrontEndTests : SampleTest
     public void Schema_reference_is_generated()
     {
         var md = Exec("--schema-md").stdout;
-        Assert.StartsWith("# dnspysql schema reference", md);
+        Assert.StartsWith("# DnSpySql schema reference", md);
         Assert.Contains("### `pseudocode`", md);
         Assert.Contains("`bp_patch([module])`", md);
     }

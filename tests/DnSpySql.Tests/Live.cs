@@ -1,11 +1,11 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Diagnostics;
 using System.Text.Json;
 
 namespace DnSpySql.Tests;
 
 /// <summary>
-/// A long-lived dnspysql session (the MCP server over stdio), for tests that need state across statements: undo/redo,
+/// A long-lived DnSpySql session (the MCP server over stdio), for tests that need state across statements: undo/redo,
 /// unsaved edits, breakpoints. Each query goes through the dnspysql_query tool and comes back as the JSON envelope.
 /// </summary>
 public sealed class Live : IDisposable

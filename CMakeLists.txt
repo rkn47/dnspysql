@@ -1,4 +1,4 @@
-# dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+# DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 cmake_minimum_required(VERSION 3.20)
 project(dnspysql VERSION 0.0.1 LANGUAGES C CXX)
 

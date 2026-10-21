@@ -1,11 +1,11 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
-[assembly: System.Reflection.AssemblyDescription("dnspysql test target")]
+[assembly: System.Reflection.AssemblyDescription("DnSpySql test target")]
 
 namespace Sample
 {

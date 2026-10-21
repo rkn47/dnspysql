@@ -1,4 +1,4 @@
-# dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+# DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 # Writes build_info.hpp with the commit the binary is built from (git describe), run on every build so a binary
 # built after a commit names that commit. The file is rewritten only when the text changes, so nothing rebuilds
 # otherwise. Without git (a source archive) the commit is "unknown".

@@ -1,22 +1,22 @@
-dnspysql
+DnSpySql
 Copyright (C) 2026 Rakan Alduwaysan
 
-dnspysql is free software: you can redistribute it and/or modify it under the terms of the
+DnSpySql is free software: you can redistribute it and/or modify it under the terms of the
 GNU General Public License, version 3 only (GPL-3.0-only), as published by the Free Software
 Foundation (see LICENSE), together with the additional terms below, which section 7 of that
 license permits.
 
-dnspysql is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
+DnSpySql is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
 the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See LICENSE.
 
 
 ADDITIONAL TERMS (GPLv3 section 7)
 
-These terms apply to all material written for dnspysql in this repository. Third-party code (see
+These terms apply to all material written for DnSpySql in this repository. Third-party code (see
 THIRD_PARTY_NOTICES.md: dnSpyEx, dnlib, ILSpy/NRefactory, libxsql, SQLite, ...) keeps its own
 license and notices.
 
-1. Attribution (section 7(b)). You must preserve the notice "dnspysql - Copyright (C) 2026
+1. Attribution (section 7(b)). You must preserve the notice "DnSpySql - Copyright (C) 2026
    Rakan Alduwaysan", with a reference to the original project, in the source files that carry it
    and in the Appropriate Legal Notices of any work that contains this material, such as the --version
    output, an interactive banner, an About screen, or the README or credits of a distribution.
@@ -26,35 +26,35 @@ license and notices.
    its --version output and user-facing banners must state that it is modified and by whom, and its
    source must carry a dated notice of the changes (section 5(a) of the GPL).
 
-3. Publicity (section 7(d)). The name of the author and the name "dnspysql" may not be used to
+3. Publicity (section 7(d)). The name of the author and the name "DnSpySql" may not be used to
    endorse or promote products derived from this material without prior written permission.
 
-4. Trademarks (section 7(e)). No rights are granted under trademark law for the name "dnspysql" or
+4. Trademarks (section 7(e)). No rights are granted under trademark law for the name "DnSpySql" or
    any associated logo. A modified version that you distribute must not present itself as
-   "dnspysql" alone; name it differently or as a modified version (for example
-   "dnspysql (modified by <you>)").
+   "DnSpySql" alone; name it differently or as a modified version (for example
+   "DnSpySql (modified by <you>)").
 
 Under section 7, terms beyond these are "further restrictions" that any recipient may remove, so
-dnspysql does not add any.
+DnSpySql does not add any.
 
 
 ADDITIONAL PERMISSION (GPLv3 section 7)
 
-dnspysql's native host is built against libxsql (https://github.com/0xeb/libxsql), which is licensed
-under the Human-Origin Source License v1.0, not the GPL. As the copyright holder of dnspysql's own
+DnSpySql's native host is built against libxsql (https://github.com/0xeb/libxsql), which is licensed
+under the Human-Origin Source License v1.0, not the GPL. As the copyright holder of DnSpySql's own
 code, the author grants this additional permission:
 
-   If you modify dnspysql, or any covered work, by linking or combining it with libxsql (or a
+   If you modify DnSpySql, or any covered work, by linking or combining it with libxsql (or a
    version of libxsql its author permits), containing parts covered by the terms of libxsql's
    license, you are granted additional permission to convey the resulting work. Corresponding
    Source for the resulting work need not include libxsql's source, as long as the libxsql version
    used is identified (the external/libxsql submodule pins it) and is available from its author.
 
-This permission covers dnspysql's own code only. It does not, and cannot, change the license of
+This permission covers DnSpySql's own code only. It does not, and cannot, change the license of
 other components. In particular dnSpyEx (GPL-3.0-or-later), whose decompiler the engine compiles and
 runs in the same process as libxsql, carries no such permission: see "Binaries" in
 THIRD_PARTY_NOTICES.md before distributing anything built from this repository. Everything else follows the GPL: you may study, run, modify and share
-dnspysql under its terms.
+DnSpySql under its terms.
 
 Permission requests (for example to use the names above): open an issue on the project's
 repository.

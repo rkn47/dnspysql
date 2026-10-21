@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 #include "mcp.hpp"
 
 #include <condition_variable>
@@ -264,7 +264,7 @@ private:
             std::string path = args.contains("path") && args["path"].is_string() ? args["path"].get<std::string>() : "";
             try {
                 const std::string text = guide_text(name, path);
-                return result(id, {{"description", "dnspysql guide: " + name},
+                return result(id, {{"description", "DnSpySql guide: " + name},
                                    {"messages", json::array({{{"role", "user"}, {"content", {{"type", "text"}, {"text", text}}}}})}});
             } catch (const std::invalid_argument& e) {
                 return error(id, -32602, e.what());
@@ -282,9 +282,9 @@ private:
             return result(id, {{"tools", json::array({
                 tool("dnspysql_query", kQueryDoc, query_props, {"sql"}),
                 tool("dnspysql_schema", "Describe tables (all, or one table's columns) and SQL functions", schema_props),
-                tool("dnspysql_guide", "How to use dnspysql for a task: rules, handles, workflows and the queries for them. "
+                tool("dnspysql_guide", "How to use DnSpySql for a task: rules, handles, workflows and the queries for them. "
                      "Read 'basics' first, then the guide for the task (explore, triage, unpack, dnspy)", guide_props),
-                // Names of earlier dnspysql versions.
+                // Names of earlier DnSpySql versions.
                 tool("sql", "Run SQL; same as dnspysql_query with a `query` argument and JSON output",
                      {{"query", {{"type", "string"}, {"description", "SQL to run"}}}}, {"query"}),
                 tool("schema", "Same as dnspysql_schema", schema_props),

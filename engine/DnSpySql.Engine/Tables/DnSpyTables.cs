@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Xml.Linq;
 using DnSpySql.Sql;
 using dnlib.DotNet;
@@ -9,7 +9,7 @@ namespace DnSpySql.Tables;
 
 /// <summary>
 /// dnSpy's own state in its settings file (dnSpy.xml, runtime setting dnspy_xml): debugger settings, Watch-window
-/// expressions, the files it opens at startup and the tabs it last showed. What dnspysql sets here is kept in the
+/// expressions, the files it opens at startup and the tabs it last showed. What DnSpySql sets here is kept in the
 /// project file and merged into dnSpy.xml like breakpoints (DnSpySettings.Export, after every changing statement).
 /// </summary>
 public static class DnSpyTables
@@ -85,14 +85,14 @@ public static class DnSpyTables
         }
         // SetOverride journals the override itself (the generic UPDATE journal would replay the effective value as an override)
         db.Register(new Table<DbgSetting>("dnspy_debugger_settings",
-                "dnSpy's debugger settings (Options > Debugger), including its anti-anti-debug protections. UPDATE value to have dnspysql " +
+                "dnSpy's debugger settings (Options > Debugger), including its anti-anti-debug protections. UPDATE value to have DnSpySql " +
                 "set one in dnSpy.xml (NULL returns it to dnSpy's own value)") { Domain = "dnspy", JournalUpdates = false }
             .Source(_ => Debugger)
             .Keyed(d => d.Index, i => i >= 0 && i < Debugger.Length ? Debugger[i] : null)
             .Text("name", d => d.Name, pushdown: Pushdown.Eq)
             .Int("value", d => (st().DebuggerSettings.TryGetValue(d.Name, out var o) ? o : FileValue(d) ?? d.Default) ? 1L : 0L,
-                (d, v) => SetOverride(d, v == null ? null : Values.ToBool(v)), doc: "what dnSpy will use: dnspysql's value, else dnSpy.xml's, else the default")
-            .Int("dnspysql_value", d => st().DebuggerSettings.TryGetValue(d.Name, out var o) ? (o ? 1L : 0L) : null, doc: "value dnspysql sets (NULL = not set)")
+                (d, v) => SetOverride(d, v == null ? null : Values.ToBool(v)), doc: "what dnSpy will use: DnSpySql's value, else dnSpy.xml's, else the default")
+            .Int("dnspysql_value", d => st().DebuggerSettings.TryGetValue(d.Name, out var o) ? (o ? 1L : 0L) : null, doc: "value DnSpySql sets (NULL = not set)")
             .Int("dnspy_value", d => FileValue(d) is bool b ? (b ? 1L : 0L) : null, doc: "value in dnSpy.xml (NULL = dnSpy's default)")
             .Bool("default_value", d => d.Default)
             .Text("description", d => d.Doc)
@@ -115,9 +115,9 @@ public static class DnSpyTables
                 "rows dnSpy already has are listed with dnspysql = 0") { Domain = "dnspy" }
             .Source(_ => WatchRows())
             .Keyed(r => r.Key, k => WatchRows().FirstOrDefault(r => r.Key == k))
-            .Int("window", r => r.Window, (r, v) => { if (r.Rec == null) throw new SqlException("only rows dnspysql added can be changed"); r.Rec.Window = Window(v); st().Changed(); })
-            .Text("expression", r => r.Expression, (r, v) => { if (r.Rec == null) throw new SqlException("only rows dnspysql added can be changed"); r.Rec.Expression = Str(v, "expression"); st().Changed(); })
-            .Bool("dnspysql", r => r.Rec != null, doc: "added by dnspysql (1) or already in dnSpy.xml (0)")
+            .Int("window", r => r.Window, (r, v) => { if (r.Rec == null) throw new SqlException("only rows DnSpySql added can be changed"); r.Rec.Window = Window(v); st().Changed(); })
+            .Text("expression", r => r.Expression, (r, v) => { if (r.Rec == null) throw new SqlException("only rows DnSpySql added can be changed"); r.Rec.Expression = Str(v, "expression"); st().Changed(); })
+            .Bool("dnspysql", r => r.Rec != null, doc: "added by DnSpySql (1) or already in dnSpy.xml (0)")
             .Bool("in_dnspy", r => r.InDnSpy, doc: "present in dnSpy.xml")
             .OnInsert(v =>
             {
@@ -152,10 +152,10 @@ public static class DnSpyTables
                 "rows dnSpy already has show what the analyst had open") { Domain = "dnspy" }
             .Source(_ => DocRows())
             .Keyed(r => r.Key, k => DocRows().FirstOrDefault(r => r.Key == k))
-            .Text("list", r => r.List, doc: "document list name; dnspysql adds to the current one")
+            .Text("list", r => r.List, doc: "document list name; DnSpySql adds to the current one")
             .Text("path", r => r.Path)
             .Bool("is_current_list", r => r.IsCurrent, doc: "in the list dnSpy opens at startup")
-            .Bool("dnspysql", r => r.Rec != null, doc: "added by dnspysql (1) or already in dnSpy.xml (0)")
+            .Bool("dnspysql", r => r.Rec != null, doc: "added by DnSpySql (1) or already in dnSpy.xml (0)")
             .Bool("in_dnspy", r => r.InDnSpy, doc: "present in dnSpy.xml")
             .Bool("file_exists", r => File.Exists(r.Path))
             .Int("module", r => s.Ws.Modules.FirstOrDefault(m => string.Equals(m.Path, r.Path, StringComparison.OrdinalIgnoreCase))?.Id, doc: "loaded module with this path, if any")

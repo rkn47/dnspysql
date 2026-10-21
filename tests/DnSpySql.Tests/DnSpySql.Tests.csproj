@@ -24,7 +24,7 @@
   </ItemGroup>
 
   <!--
-    Build the sample assemblies and copy them next to the tests: sample/Sample.dll (dnspysql's own cases) and
+    Build the sample assemblies and copy them next to the tests: sample/Sample.dll (DnSpySql's own cases) and
     sample/SampleTarget.dll + .pdb (the cases in ParityTests). Both are benign test programs.
   -->
   <ItemGroup>

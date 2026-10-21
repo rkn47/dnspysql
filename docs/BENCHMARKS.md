@@ -4,7 +4,7 @@ Wall time per query, including process start and assembly load. Each figure is t
 runs. Peak memory is the process's maximum resident set. Measured on Linux x64 (REMnux) on
 2026-10-10.
 
-- **before:** dnspysql as of `a85031e`, which used libxsql `cached_table` and full-row materialization.
+- **before:** DnSpySql as of `a85031e`, which used libxsql `cached_table` and full-row materialization.
 - **after:** generator tables, column projection, batched cursors, count-only `COUNT(*)`, direct
   token lookups and engine-side equality indexes.
 

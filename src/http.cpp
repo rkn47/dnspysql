@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 #include "http.hpp"
 
 #include <chrono>
@@ -182,7 +182,7 @@ bool HttpServer::start() {
         return false;
     }
     impl_->thread = std::thread([this] { impl_->svr.listen_after_bind(); });
-    std::cerr << "dnspysql http listening on " << url() << (impl_->token.empty() ? "" : " (token required)") << "\n";
+    std::cerr << "DnSpySql http listening on " << url() << (impl_->token.empty() ? "" : " (token required)") << "\n";
     return true;
 }
 

@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -98,7 +98,7 @@ public sealed class ExceptionSettingRec
     public bool IsCustom { get; set; }
 }
 
-/// <summary>A Watch-window expression dnspysql adds to dnSpy (window 0-3, like dnSpy's Watch 1-4).</summary>
+/// <summary>A Watch-window expression DnSpySql adds to dnSpy (window 0-3, like dnSpy's Watch 1-4).</summary>
 public sealed class WatchRec
 {
     public long Id { get; set; }
@@ -106,7 +106,7 @@ public sealed class WatchRec
     public string Expression { get; set; } = "";
 }
 
-/// <summary>A file dnspysql adds to dnSpy's current document list (opened when dnSpy starts).</summary>
+/// <summary>A file DnSpySql adds to dnSpy's current document list (opened when dnSpy starts).</summary>
 public sealed class DocumentRec
 {
     public long Id { get; set; }
@@ -127,14 +127,14 @@ public sealed class ProjectStore
     public List<BreakpointRec> Breakpoints { get; set; } = new();
     public List<ModuleBreakpointRec> ModuleBreakpoints { get; set; } = new();
     public List<ExceptionSettingRec> ExceptionSettings { get; set; } = new();
-    /// <summary>dnSpy debugger settings dnspysql overrides (DebuggerSettings property name → value).</summary>
+    /// <summary>dnSpy debugger settings DnSpySql overrides (DebuggerSettings property name → value).</summary>
     public SortedDictionary<string, bool> DebuggerSettings { get; set; } = new(StringComparer.Ordinal);
     public List<WatchRec> Watch { get; set; } = new();
     public List<DocumentRec> Documents { get; set; } = new();
     public SortedDictionary<string, string> Kv { get; set; } = new(StringComparer.Ordinal);
     /// <summary>Module key (MVID) → the file save() last wrote for it: the copy dnSpy opens, so exports name that path.</summary>
     public Dictionary<string, string> DnSpyTargets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>dnSpy settings/export file (full path, upper case) → keys of the entries dnspysql last wrote there.</summary>
+    /// <summary>dnSpy settings/export file (full path, upper case) → keys of the entries DnSpySql last wrote there.</summary>
     public Dictionary<string, List<string>> DnSpyExports { get; set; } = new(StringComparer.Ordinal);
 
     public ProjectStore(string? path) { Path = path; }

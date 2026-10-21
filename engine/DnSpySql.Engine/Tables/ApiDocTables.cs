@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Text;
 using System.Xml.Linq;
 using DnSpySql.Functions;
@@ -13,7 +13,7 @@ namespace DnSpySql.Tables;
 /// dnSpy's XmlDocLoader looks next to the assembly, in the .NET Framework reference assemblies and in the .NET reference
 /// pack of the assembly's target framework. Documentation IDs carry no assembly name, so when that finds nothing (a .NET
 /// Framework sample on a machine without the Framework reference assemblies) the ID is looked up across the .NET
-/// reference packs of the runtime dnspysql runs on.
+/// reference packs of the runtime DnSpySql runs on.
 /// </summary>
 public static class ApiDocTables
 {
@@ -130,7 +130,7 @@ public static class ApiDocTables
         return list;
     }
 
-    // XML documentation files of the newest .NET reference packs next to the runtime dnspysql runs on
+    // XML documentation files of the newest .NET reference packs next to the runtime DnSpySql runs on
     // (<dotnet>/packs/Microsoft.NETCore.App.Ref/<version>/ref/<tfm>/*.xml, and the desktop and ASP.NET packs).
     static List<string> PackFiles()
     {

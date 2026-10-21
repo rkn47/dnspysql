@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using System.Xml.Linq;
 using DnSpySql.Tables;
 using DnSpySql.Sql;
@@ -86,7 +86,7 @@ public static class DnSpySettings
     static string FileOf(string? path) => (path ?? "")[((path ?? "").LastIndexOfAny(['/', '\\']) + 1)..].ToUpperInvariant();
 
     // Exports are remembered per target file (see ProjectStore.DnSpyExports), so the next export to the same file also
-    // removes what dnspysql wrote there before and no longer has: deleted breakpoints, or entries at a module's old path.
+    // removes what DnSpySql wrote there before and no longer has: deleted breakpoints, or entries at a module's old path.
     internal static string ExportKey(string path) => Path.GetFullPath(path).ToUpperInvariant();
 
     /// <summary>
@@ -237,7 +237,7 @@ public static class DnSpySettings
 
     internal static string? A(XElement e, string name) => e.Attribute(name) is { } a ? Unesc(a.Value) : null;
 
-    // Debugger settings, Watch expressions and the files dnSpy opens: what dnspysql set is merged in, what it set before
+    // Debugger settings, Watch expressions and the files dnSpy opens: what DnSpySql set is merged in, what it set before
     // and no longer has is taken back (`prev`), and everything else in dnSpy's sections is left alone.
     static int ExportDnSpyState(Session s, XElement root, HashSet<string> prev, HashSet<string> written)
     {

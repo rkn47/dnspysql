@@ -1,4 +1,4 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 namespace DnSpySql;
 
 /// <summary>
@@ -15,7 +15,7 @@ public static class RefPaths
         var dirs = new List<string>();
         dirs.AddRange(user);
         // Shipped next to the engine (build.sh / the Docker image put the net48 reference pack in engine/refs). The
-        // engine is hosted by the native dnspysql, so the app base directory is the host's, not this assembly's.
+        // engine is hosted by DnSpySql's native host, so the app base directory is the host's, not this assembly's.
         var appRefs = Path.Combine(Path.GetDirectoryName(typeof(RefPaths).Assembly.Location) ?? AppContext.BaseDirectory, "refs");
         if (Directory.Exists(appRefs)) dirs.AddRange(Directory.GetDirectories(appRefs, "v4.*", SearchOption.AllDirectories).OrderByDescending(d => d));
         if (OperatingSystem.IsWindows())

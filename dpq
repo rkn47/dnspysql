@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
-# dpq: sandboxed dnspysql sessions, one container per sample (modelled on idasql's idq).
+# DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+# dpq: sandboxed DnSpySql sessions, one container per sample (modelled on idasql's idq).
 #
 #   dpq open <file>              start a session (HTTP inside the container, no network), prints its id
 #   dpq q <id-prefix> <sql>...   run SQL in a session

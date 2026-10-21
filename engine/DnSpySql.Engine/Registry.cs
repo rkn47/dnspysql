@@ -1,10 +1,10 @@
-// dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
+// DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 using DnSpySql.Tables;
 using DnSpySql.Functions;
 
 namespace DnSpySql;
 
-/// <summary>Registers every table and function of the dnspysql schema.</summary>
+/// <summary>Registers every table and function of the DnSpySql schema.</summary>
 public static class Registry
 {
     public static void RegisterAll(Session s)
