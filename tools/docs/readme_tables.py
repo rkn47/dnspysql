@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # dnspysql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
-"""Regenerates the table list in README.md (section "Schema", from "Every table and view, by area." to "Conventions:")
+"""Regenerates the table list in README.md (section "Schema", from "Every table and view, by area" to "### Conventions")
 from the live catalog of a built dnspysql, so the README cannot drift from the code.
 
     python tools/docs/readme_tables.py [--exe build/dnspysql] [--readme README.md] [--check]
@@ -85,7 +85,8 @@ def render(rows):
     out = []
     for dom, title in ORDER:
         rs = sorted((r for r in rows if r["domain"] == dom), key=lambda r: (r["kind"] == "view", r["table_name"]))
-        out += [f"### {title}", "", "| table | writes | description |", "|---|---|---|"]
+        # one collapsible block per area: the whole list open would be most of the README
+        out += ["<details>", f"<summary><b>{title}</b> ({len(rs)})</summary>", "", "| table | writes | description |", "|---|---|---|"]
         for r in rs:
             desc = esc(SHORT.get(r["table_name"], r["description"]).rstrip("."))
             if r["kind"] == "view":
@@ -93,7 +94,7 @@ def render(rows):
             if r["required_filter"]:
                 desc += f" (needs `{r['required_filter']}`)"
             out.append(f"| `{r['table_name']}` | {writes(r)} | {desc} |")
-        out.append("")
+        out += ["", "</details>", ""]
     return "\n".join(out).rstrip("\n")
 
 
@@ -110,11 +111,12 @@ def main():
     cols = j["results"][0]["columns"]
     rows = [dict(zip(cols, r)) for r in j["results"][0]["rows"]]
     s = open(a.readme, encoding="utf-8").read()
-    start = s.index("Every table and view, by area.")
-    end = s.index("\nConventions:", start)
+    start = s.index("Every table and view, by area")
+    end = s.index("\n### Conventions", start)
     new = (s[:start]
-           + "Every table and view, by area. *writes* lists what the table accepts besides `SELECT`; edits are journaled\n"
-           + "(`undo()`/`redo()`) and refused with `--readonly`. Columns are in [docs/SCHEMA.md](docs/SCHEMA.md).\n\n"
+           + f"Every table and view, by area ({len(rows)} in all; click an area to open it). *writes* lists what the table\n"
+           + "accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused with `--readonly`. Columns are in\n"
+           + "[docs/SCHEMA.md](docs/SCHEMA.md).\n\n"
            + render(rows) + "\n" + s[end:])
     if a.check:
         if new != s:
