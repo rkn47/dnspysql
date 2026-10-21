@@ -64,14 +64,35 @@ exporter.
 
 ## Contents
 
-- [Build](#build) — [Docker](#docker), [Tests](#tests)
+- [Build](#build)
+  - [Docker](#docker)
+  - [Tests](#tests)
 - [Quick start](#quick-start)
-- [Usage](#usage) — [options](#options), [front ends](#front-ends)
-- [Schema](#schema) — [tables](#tables), [conventions](#conventions), [functions](#functions)
-- [Handing results to dnSpy](#handing-results-to-dnspy) — [breakpoints](#breakpoints), [annotated assemblies](#annotated-assemblies-for-dnspy), [project export](#exporting-a-project)
+- [Usage](#usage)
+  - [Options](#options)
+  - [Front ends](#front-ends)
+- [Schema](#schema)
+  - [Tables](#tables)
+  - [Conventions](#conventions)
+  - [Functions](#functions)
+- [Handing results to dnSpy](#handing-results-to-dnspy)
+  - [Breakpoints](#breakpoints)
+    - [Kept in step with dnSpy](#kept-in-step-with-dnspy)
+  - [Annotated assemblies for dnSpy](#annotated-assemblies-for-dnspy)
+  - [Exporting a project](#exporting-a-project)
 - [Triage and protected assemblies](#triage-and-protected-assemblies)
+  - [Triage](#triage)
+    - [The IL interpreter](#the-il-interpreter)
+  - [Decompiling protected assemblies](#decompiling-protected-assemblies)
+    - [Anti-tamper](#anti-tamper)
+    - [Decrypted strings in the code](#decrypted-strings-in-the-code)
+    - [The file's own bytes](#the-files-own-bytes)
+    - [Decompiler robustness](#decompiler-robustness)
+    - [Damaged headers, overlays and bundles](#damaged-headers-overlays-and-bundles)
 - [How it works](#how-it-works)
-- [Credits](#credits-and-third-party-software) · [Contributing](#contributing) · [License](#license)
+- [Credits and third-party software](#credits-and-third-party-software)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Build
 
@@ -79,11 +100,7 @@ exporter.
 
 DnSpySql builds and runs on **Windows x64** and **Linux x64**. Both need CMake ≥ 3.20, Ninja and the .NET 8 SDK.
 
-<table>
-<tr><th>Windows</th><th>Linux</th></tr>
-<tr><td>
-
-Visual Studio 2022 or later (Build Tools are enough) with the C++ workload:
+**Windows:** Visual Studio 2022 or later (Build Tools are enough) with the C++ workload:
 
 ```bat
 git submodule update --init
@@ -92,9 +109,7 @@ git -C external/dnSpyEx submodule update --init --depth 1 ^
 build.cmd
 ```
 
-</td><td>
-
-gcc or clang (e.g. `apt install build-essential cmake ninja-build`):
+**Linux:** gcc or clang (e.g. `apt install build-essential cmake ninja-build`):
 
 ```bash
 git submodule update --init
@@ -102,9 +117,6 @@ git -C external/dnSpyEx submodule update --init --depth 1 \
     Extensions/ILSpy.Decompiler/ICSharpCode.Decompiler Extensions/ILSpy.Decompiler/NRefactory
 ./build.sh
 ```
-
-</td></tr>
-</table>
 
 Only two of dnSpyEx's nested submodules are needed; `--recursive` would fetch many more. See
 [engine/vendor/README.md](engine/vendor/README.md) for what is compiled and why.
