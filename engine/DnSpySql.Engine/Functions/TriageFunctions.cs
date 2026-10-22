@@ -65,6 +65,13 @@ public static class TriageFunctions
             && CoreFunctions.AntiTamperInitializer(s, m) != null)
             next.Add($"SELECT untamper({m.Id})  -- anti-tamper: method bodies are encrypted in the file; analyze the module it returns");
 
+        // a shell with no code: the first thing to do is to open what it carries
+        if (protections.Any(f => f.Kind == "stub assembly"))
+            next.Insert(0, $"SELECT open_bytes(data) FROM embedded_pes WHERE module = {m.Id} AND is_dotnet ORDER BY size DESC LIMIT 1  -- the code of this " +
+                     "assembly: it has no method body of its own");
+        foreach (var vm in ProtectionTables.Virtualization(m))
+            next.Add($"SELECT caller_name FROM callers WHERE method = {m.H(vm.Dispatcher)}  -- the {vm.Stubs.Count} methods virtualized into " +
+                     $"{OneLine(vm.Dispatcher.FullName)}: their code is VM bytecode, not IL");
         var carved = ProtectionTables.Carve(m).ToList();
         o["embedded_pes"] = Array(carved.Select(c =>
         {

@@ -65,7 +65,8 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | Configs decrypted in place at startup (not in dnSpy: seen only by debugging past the decoder) | `decoded_fields` (each settings field as the decoder leaves it, interpreted after the static constructor; `error` when it stops) | ✅ |
 | Behaviour and indicators (not in dnSpy) | `capabilities` (API, import, reflection or string evidence at the call, also through proxy methods), `iocs` (URLs, IPs, domains, webhooks, tokens, wallets, registry keys, mutex names; in literals, base64 literals, decrypted strings and text resources), `text_iocs` (the same in any text) | ✅ |
 | Every call of a string decryptor and its plaintext (de4dot's string decryption, without running anything) | `decryptor_calls` (caller, offset, typed literal arguments or settings fields of known value, `plaintext` from the IL interpreter, `plaintext_kind` for a second layer), `emulate()` | ✅ |
-| Protector identification (not in dnSpy; de4dot's detection) | `protections` (marker types with decoy detection, anti-tamper, anti-debug, anti-VM, string encryption, control-flow flattening, proxy calls, encrypted/embedded resources; each with confidence and evidence) | ✅ |
+| Protector identification (not in dnSpy; de4dot's detection) | `protections` (marker types with decoy detection, anti-tamper, anti-debug, anti-VM, string encryption, control-flow flattening, proxy calls, IL virtualization, code-less stub assemblies, encrypted/embedded resources; each with confidence and evidence) | ✅ |
+| PE files inside a file that is no .NET module (not in dnSpy, which refuses to open it) | `carve_file WHERE path = '...'` (the PEs in its bytes, with `open_bytes(data)` for a .NET one) | ✅ |
 | String decryptor location (not in dnSpy; de4dot's `--strtyp`) | `string_decryptors` (static string-returning methods ranked by call sites with literal arguments, sample arguments) | ✅ |
 | Byte pattern search | `byte_search WHERE pattern = '4D 5A ?? 00'` | ✅ |
 
@@ -229,7 +230,7 @@ any debugger stops there.
 | max stack / init locals | `UPDATE methods SET max_stack, init_locals` | ✅ |
 | Copy/paste instructions between methods | — (re-insert via `il_insert`) | ❌ |
 | Replace all ldstr | `replace_string(old, new)` | ✅ |
-| Decrypted strings in the code (not in dnSpy; what de4dot is run for before opening a sample in it) | `inline_strings([module [, decryptor]])`: each call site `decryptor_calls` interprets to a string becomes `ldstr`, undoable; `save()` then hands dnSpy a readable copy | ✅ |
+| Decrypted strings in the code (not in dnSpy; what de4dot is run for before opening a sample in it) | `inline_strings([module [, decryptor [, mode]]])`: each call site `decryptor_calls` interprets to a string becomes `ldstr`, undoable; `save()` then hands dnSpy a readable copy; `mode` 'comment' or 'both' writes plaintexts as comments where the code cannot or must not change | ✅ |
 
 ### 2.5 C# compiler (Roslyn)
 

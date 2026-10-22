@@ -238,7 +238,7 @@ every dnSpy window and command to it.
 
 ### Tables
 
-Every table and view, by area (103 in all; click an area to open it). *writes* lists what the table
+Every table and view, by area (104 in all; click an area to open it). *writes* lists what the table
 accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused with `--readonly`. Columns are in
 [docs/SCHEMA.md](docs/SCHEMA.md).
 
@@ -329,17 +329,18 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 </details>
 
 <details>
-<summary><b>Triage: protection, capabilities, indicators, configs</b> (10)</summary>
+<summary><b>Triage: protection, capabilities, indicators, configs</b> (11)</summary>
 
 | table | writes | description |
 |---|---|---|
 | `capabilities` |  | What the code does, at the call or literal that shows it: injection, persistence, download and execute, keylogging, capture, credential theft and more |
+| `carve_file` |  | PE files in any file's bytes, for a file `open()` refuses (a native dropper): `WHERE path = '...'`, then `open_bytes(data)` of a .NET one (needs `WHERE path = ...`) |
 | `decoded_fields` |  | Settings as the program decrypts them at startup: a settings class's fields after the method that decodes them in place (key from another field), interpreted |
 | `decryptor_calls` |  | Every call of a string decryptor with literal arguments (or settings fields of known value): what it decrypts, where to break, whether it is still ciphertext |
 | `embedded_pes` |  | PE files inside a module: in its file bytes (overlay, sections), in resources and `.resources` entries, also compressed or split across numbered resources |
 | `field_inits` |  | Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also computed by a getter, decryptor or framework call |
 | `iocs` |  | URLs, webhooks, Telegram tokens, IPs, domains, host:port pairs, e-mails, wallets, registry keys and mutex names in literals, base64 literals, decrypted strings, decoded settings and text resources |
-| `protections` |  | Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques, with evidence |
+| `protections` |  | Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques (anti-tamper, IL virtualization, a code-less stub, ...), with evidence |
 | `split_text` |  | A text cut at a `separator` (default ','), one row per piece: configs are often one delimited string (needs `WHERE text = ...`) |
 | `string_decryptors` |  | Methods shaped like a string decryptor, ranked by call sites with literal arguments |
 | `text_iocs` |  | The indicators iocs finds, in any text: WHERE text = &lt;a decrypted config, a resource, a plaintext&gt;. Base64 inside it is decoded and searched too (needs `WHERE text = ...`) |
@@ -484,7 +485,7 @@ By area; signatures are in [docs/SCHEMA.md](docs/SCHEMA.md).
 | session | `open`, `open_bytes` (a decoded payload as a module, named from its hash; bytes already open return that module; a native PE gives NULL and a note), `open_bundle_entry` (an assembly inside a single-file bundle), `untamper` (anti-tampered bodies, decrypted statically), `close` (a module and the stages that came out of it, freeing their memory), `close_all`, `save`, `save_raw`, `save_project`, `undo`, `redo`, `is_dirty`, `set_setting` |
 | decompiler | `decompile`, `il_text`, `decompile_module`, `export_project`, `api_doc` (dnSpy's tooltip text) |
 | raw bytes | `read_bytes`, `patch_bytes`, `method_bytes`, `rva_to_offset`, `offset_to_rva` |
-| editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `inline_strings` (decrypted strings into the code), `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |
+| editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `inline_strings` (decrypted strings into the code, or as comments), `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |
 | C# compiler | `compile_method`, `add_members`, `add_type`, `edit_type`, `compile_preview` |
 | annotations | `set_comment`, `tag` |
 | triage | `triage` (the first look at a module as one JSON object: protections, payloads, decrypted strings, capabilities, indicators, config candidates, next queries) |
@@ -661,8 +662,11 @@ of them in 74 samples.
 Start with what protected it. `protections` names the protector from its marker types (ConfuserEx, SmartAssembly,
 Babel, Dotfuscator, Agile.NET, Goliath, Costura) and flags markers planted in the wrong namespace as decoys. It also
 lists the techniques it finds, each with a confidence and the evidence: renamed members, anti-tamper (bodies that are
-encrypted until runtime), anti-debug and anti-VM checks, string encryption, control-flow flattening, proxy calls, and
-encrypted or embedded resources. `string_decryptors` ranks the methods shaped like a string decryptor: static,
+encrypted until runtime), anti-debug and anti-VM checks, string encryption, control-flow flattening, proxy calls, IL
+virtualization (methods that only hand an id and their arguments to one dispatcher, whose code is VM bytecode; their
+`decompile()` says so), a stub assembly with no method body (its code is in what it carries, or an encrypted
+section), and encrypted or embedded resources. Methods of a C++/CLI image are native code, not encrypted bodies.
+`string_decryptors` ranks the methods shaped like a string decryptor: static,
 returning a string, and called from many sites with literal arguments. Breakpoints on one show the plaintext in
 dnSpy.
 
@@ -695,10 +699,11 @@ constructor calls it.
 
 #### Decrypted strings in the code
 
-`inline_strings([module [, decryptor]])` replaces every call site that `decryptor_calls` interprets to a string with
-`ldstr` of the plaintext; its literal arguments become nops. A site that code jumps into (flattened control flow,
-where other paths pass other arguments) is left as it is, with a note. It is one undoable step, and the decompiled
-code and a saved copy then show the strings.
+`inline_strings([module [, decryptor [, mode]]])` replaces every call site that `decryptor_calls` interprets to a
+string with `ldstr` of the plaintext; its literal arguments become nops. A site that code jumps into (flattened control
+flow, where other paths pass other arguments) is left as it is, with a note. It is one undoable step, and the
+decompiled code and a saved copy then show the strings. With `mode = 'both'` such a site gets the plaintext as a
+comment instead, and `'comment'` comments every site and leaves the code alone; `save()` writes the comments for dnSpy.
 
 #### The file's own bytes
 

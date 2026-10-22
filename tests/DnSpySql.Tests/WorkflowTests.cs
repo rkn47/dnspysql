@@ -246,6 +246,28 @@ public sealed class WorkflowTests : SampleTest
     }
 
     [Fact]
+    public void Inline_strings_can_write_comments_instead_of_code()
+    {
+        const string types = "select add_type('public static class Enc { public static string D(int k) => new string((char)(97 + k), 3); } " +
+                             "public static class Use { public static string A() => Enc.D(1); public static string B() => Enc.D(2); " +
+                             "public static string C() => Enc.D(3) + Enc.D(4); public static string E() => Enc.D(5); " +
+                             "public static string F(bool c) => Enc.D(c ? 6 : 7); }')";
+        // comment: the code stays, each interpreted call gets its plaintext
+        var r = Run(types, "select inline_strings(NULL, NULL, 'comment')", "select decompile(resolve('Use::C'))",
+            "select comment from comments where handle = resolve('Use::C') order by offset", "select undo()", "select count(*) from comments");
+        Assert.Equal(6, r.Long(1));
+        Assert.Contains("Enc.D(3)", r.Text(2));
+        Assert.Equal(new[] { "decrypted: \"ddd\"", "decrypted: \"eee\"" }, r.Rows(3).Select(x => x.GetProperty("comment").GetString()));
+        Assert.Equal(0, r.Long(5));
+        // both: the code where it can be rewritten, a comment at F's call, which code jumps into
+        var b = Run(types, "select inline_strings(NULL, NULL, 'both')", "select comment from comments where handle = resolve('Use::F')",
+            "select decompile(resolve('Use::A'))");
+        Assert.Equal(6, b.Long(1));
+        Assert.Equal("decrypted: \"ggg\"", b.Text(2));
+        Assert.Contains("\"bbb\"", b.Text(3));
+    }
+
+    [Fact]
     public void Decompile_module_stops_between_types_within_the_timeout()
     {
         // a 2 s timeout leaves nothing past the 2 s safety margin: each call decompiles one more type, says what to do, and

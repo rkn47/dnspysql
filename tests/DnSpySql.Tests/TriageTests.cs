@@ -21,6 +21,63 @@ public sealed class TriageTests : SampleTest
         Assert.Equal(1, rows["Motto"].GetProperty("is_default").GetInt64()); // static string Motto = "": the compiler's store of the default
     }
 
+    static readonly string TargetDll = Path.Combine(AppContext.BaseDirectory, "sample", "SampleTarget.dll");
+
+    [Fact]
+    public void Methods_virtualized_into_one_dispatcher_are_named()
+    {
+        // a dispatcher with a 60-way switch in a loop (the handlers), and twelve methods that only hand it an id and their arguments
+        var cases = string.Join(" ", Enumerable.Range(0, 60).Select(k => $"case {k}: acc += {k + 1}; break;"));
+        var stubs = string.Join(" ", Enumerable.Range(0, 12).Select(i => $"public static int Fn{i}(int a, int b) => (int)Shield.Vm.Run({i}, new object[] {{ a, b }});"));
+        var r = Run($"select add_type('namespace Shield {{ public static class Vm {{ public static object Run(int id, object[] args) {{ int acc = 0; " +
+                    $"for (int i = 0; i < 3; i++) {{ switch (id + i) {{ {cases} }} }} return acc + (int)args[0]; }} }} }} " +
+                    $"public static class Virt {{ {stubs} }}')",
+            "select name, confidence, evidence, handle = resolve('Shield.Vm::Run') from protections where kind = 'virtualization'",
+            "select decompile(resolve('Virt::Fn3'))", "select triage()");
+        var v = r.Values(1);
+        Assert.Equal("Shield", v[0].GetString());
+        Assert.Equal("high", v[1].GetString());
+        Assert.StartsWith("12 of ", v[2].GetString());
+        Assert.Equal(1, v[3].GetInt64());
+        Assert.Contains("// dnspysql: virtualized: this body only calls System.Object Shield.Vm::Run(System.Int32,System.Object[]) with id 3", r.Text(2));
+        var list = JsonDocument.Parse(r.Text(3)).RootElement.GetProperty("next").EnumerateArray().Select(x => x.GetString()!).Single(n => n.Contains("virtualized into"));
+        Assert.StartsWith("SELECT caller_name FROM callers WHERE method = ", list);
+    }
+
+    [Fact]
+    public void An_assembly_without_code_points_at_the_code_it_carries()
+    {
+        var carrier = PathIn("Carrier.dll");
+        var shell = PathIn("Shell.dll");
+        Run($"INSERT INTO resources(name, data) VALUES ('stage.dll', x'{Convert.ToHexString(File.ReadAllBytes(TargetDll))}')", $"select save({Cli.Sql(carrier)})");
+        // every method row's RVA set to 0: types and resources, but no method body
+        Cli.Run(carrier, "update md_rows set value = 0 where table_name = 'Method' and column = 'RVA'", $"select save_raw({Cli.Sql(shell)})").Ok();
+        var r = Cli.Run(shell, "select evidence from protections where kind = 'stub assembly'", "select triage()").Ok();
+        Assert.StartsWith("no code in this assembly (", r.Text(0));
+        Assert.Contains("the largest .NET PE it carries is in resource 'stage.dll'", r.Text(0));
+        var first = JsonDocument.Parse(r.Text(1)).RootElement.GetProperty("next")[0].GetString()!;
+        Assert.StartsWith("SELECT open_bytes(data) FROM embedded_pes WHERE module = 1 AND is_dotnet ORDER BY size DESC LIMIT 1", first);
+        Assert.Equal(2, Cli.Run(shell, first[..first.IndexOf("  --", StringComparison.Ordinal)]).Ok().Long());
+    }
+
+    [Fact]
+    public void A_native_file_can_be_searched_for_the_pes_it_carries()
+    {
+        // a native-looking PE (the stage's headers without the CLR directory) with the .NET stage right after it
+        var stage = File.ReadAllBytes(TargetDll);
+        var stub = stage[..0x200];
+        int pe = BitConverter.ToInt32(stub, 0x3C), opt = pe + 0x18;
+        int clr = opt + (BitConverter.ToUInt16(stub, opt) == 0x20B ? 0x70 : 0x60) + 14 * 8;
+        Array.Clear(stub, clr, 8);
+        var dropper = PathIn("dropper.bin");
+        File.WriteAllBytes(dropper, [.. stub, .. stage]);
+        Assert.Contains("FROM carve_file WHERE path = ", Cli.Run(Sample, $"select open({Cli.Sql(dropper)})").Error);
+        var r = Run($"select offset, is_dotnet from carve_file where path = {Cli.Sql(dropper)} order by offset",
+            $"select open_bytes(data) from carve_file where path = {Cli.Sql(dropper)} and is_dotnet");
+        Assert.Equal(new[] { "0 0", "512 1" }, r.Rows(0).Select(x => $"{x.GetProperty("offset").GetInt64()} {x.GetProperty("is_dotnet").GetInt64()}"));
+        Assert.Equal(2, r.Long(1));
+    }
+
     [Fact]
     public void Triage_writes_values_json_cannot_hold_as_text()
     {

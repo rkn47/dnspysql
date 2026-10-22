@@ -64,6 +64,24 @@ public static class ProtectionTables
                      "so WHERE parent_offset IS NULL counts each top-level PE once")
             .Estimate(5, 50));
 
+        // ---- carve_file: the same for a file that is not a module ------------------------------------------------------
+        s.Db.Register(new Table<FileCarve>("carve_file",
+                "PE files in any file's bytes, the file itself included: WHERE path = '...'. For a file open() refuses (a native " +
+                "dropper or loader) that may carry an encrypted or plain .NET payload; SELECT open_bytes(data) FROM carve_file " +
+                "WHERE path = '...' AND is_dotnet opens one. The file is only read") { Domain = "triage" }
+            .Source(c => c.Text("path") is { } path ? CarveFile(path) : [])
+            .Text("location", r => r.Location, doc: "the file (offset 0) | inside the file's image | overlay (after the image the headers describe) | file bytes")
+            .Int("offset", r => r.Offset, doc: "file offset")
+            .Int("size", r => r.Size, doc: "from the section table (and the certificate), clipped to the bytes there are")
+            .Bool("is_dotnet", r => Workspace.NotDotNet(r.Slice()[..Math.Min(r.Slice().Length, 4096)].ToArray()) == null)
+            .Text("machine", r => Enum.GetName(typeof(dnlib.PE.Machine), r.Machine) ?? $"0x{r.Machine:X}")
+            .Text("kind", r => r.IsDll ? "dll" : "exe")
+            .Text("sha256", r => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(r.Slice())).ToLowerInvariant())
+            .Blob("data", r => r.Slice().ToArray(), doc: "the PE's bytes")
+            .Int("parent_offset", r => r.Parent, doc: "offset of the row whose PE contains this one; NULL when none does")
+            .Arg("path", SqlType.Text, r => r.Path, doc: "the file to read")
+            .Estimate(5, 1));
+
         var ws = s.Ws;
         s.Db.Register(new Table<Finding>("protections",
                 "Protectors, packers and protection techniques detected in each module, with the evidence: ConfuserEx, SmartAssembly, " +
@@ -73,7 +91,8 @@ public static class ProtectionTables
             .Int("module", f => f.M.Id, pushdown: Pushdown.Eq)
             .Text("name", f => f.Name, doc: "product (ConfuserEx, SmartAssembly, ...) or technique")
             .Text("kind", f => f.Kind, doc: "obfuscator | embedded assemblies | decoy marker | name obfuscation | anti-tamper | anti-debug | anti-vm | " +
-                                          "string encryption | control flow | proxy calls | constant obfuscation | encrypted resources | embedded executable | mixed mode")
+                                          "string encryption | control flow | proxy calls | virtualization | constant obfuscation | encrypted resources | " +
+                                          "embedded executable | stub assembly (no method body: the code is elsewhere) | mixed mode")
             .Text("confidence", f => f.Confidence, doc: "high | medium | low | decoy")
             .Text("evidence", f => f.Evidence)
             .Int("handle", f => f.Handle, doc: "the type or method the evidence points at, when there is one")
@@ -264,6 +283,25 @@ public static class ProtectionTables
         if (thunks >= 20 && thunks * 20 >= bodied)
             found.Add(new Finding(m, "proxy calls", "proxy calls", thunks * 5 >= bodied ? "high" : "medium",
                 $"{thunks} of {bodied} methods are static thunks that only forward their arguments to another method"));
+        // IL virtualization: methods whose whole body hands an id and its arguments to one dispatcher, which runs bytecode
+        foreach (var virt in Virtualization(m))
+            found.Add(new Finding(m, VmName(virt.Dispatcher), "virtualization", virt.HandlerLoop ? "high" : "medium",
+                $"{virt.Stubs.Count} of {bodied} methods forward their arguments to {virt.Dispatcher.FullName} with an id: their code runs in an IL " +
+                "virtual machine, and decompile() shows only the forwarding" + (virt.HandlerLoop ? " (it dispatches through a switch of 50 or more handlers in a loop)" : ""),
+                m.H(virt.Dispatcher)));
+        // a metadata shell: types and maybe resources, but no method body; the code is somewhere else (an encrypted
+        // section, a carried assembly)
+        if (bodies.Count == 0 && (md.Resources.Count > 0 || md.ManagedEntryPoint != null || HighEntropySection(m).Name != null))
+        {
+            var largest = Carve(m).Where(c => Workspace.NotDotNet(c.Slice()[..Math.Min(c.Slice().Length, 4096)].ToArray()) == null).MaxBy(c => c.Size);
+            var section = HighEntropySection(m);
+            found.Add(new Finding(m, "stub assembly", "stub assembly", "high", string.Join("; ", new[]
+            {
+                $"no code in this assembly ({types.Count} types, {md.Metadata.TablesStream.MethodTable.Rows} methods, none with a body): its code is elsewhere",
+                largest != null ? $"the largest .NET PE it carries is in {largest.Location} ({largest.Size:N0} bytes)" : null,
+                section is var (name, size, entropy) && name != null ? $"section {name} is {size:N0} bytes of entropy {entropy:F2}" : null,
+            }.Where(x => x != null))));
+        }
         // constants written as arithmetic on other constants ((14861 + 79295) ^ 94152): compilers fold those, so many
         // of them were put there; a few are hand-written bit masks
         if (folded >= 40)
@@ -379,24 +417,55 @@ public static class ProtectionTables
         var file = m.DiskBytes;
         var sections = m.FileMetadata.PEImage.ImageSectionHeaders;
         long end = sections.Select(h => (long)h.PointerToRawData + h.SizeOfRawData).DefaultIfEmpty(0).Max();
-        // found in offset order, so a PE that holds others (a dropper's payload with its own payloads) comes first: the
-        // containers still open at an offset are a stack, innermost on top
-        var open = new Stack<(long Start, long End)>();
-        for (int at = file.AsSpan(1).IndexOf("MZ"u8) + 1; at > 0; )
+        foreach (var (at, pe, parent) in PesIn(file, 1, (at, size) => seen.Add(Key(file, at, size))))
         {
-            if (Header(file, at) is { } pe && seen.Add(Key(file, at, pe.Size)))
+            var section = sections.FirstOrDefault(h => at >= h.PointerToRawData && at < (long)h.PointerToRawData + h.SizeOfRawData);
+            var where = at >= end ? "overlay" : section != null ? $"section {section.DisplayName}" : "headers";
+            yield return new Carved(m, where, at, pe.Size, pe.Machine, pe.Dll, file) { Parent = parent };
+        }
+    }
+
+    // Every PE in the bytes from `from` on whose headers hold up (and that `keep` takes), in offset order, with the offset
+    // of the smallest earlier one that contains it. A PE that holds others (a dropper's payload with its own payloads)
+    // comes first, so the containers still open at an offset are a stack, innermost on top.
+    static IEnumerable<(int At, (long Size, ushort Machine, bool Dll) Pe, long? Parent)> PesIn(byte[] file, int from, Func<int, long, bool> keep)
+    {
+        var open = new Stack<(long Start, long End)>();
+        int first = from >= file.Length ? -1 : file.AsSpan(from).IndexOf("MZ"u8);
+        for (int at = first < 0 ? -1 : from + first; at >= 0; )
+        {
+            if (Header(file, at) is { } pe && keep(at, pe.Size))
             {
-                var section = sections.FirstOrDefault(h => at >= h.PointerToRawData && at < (long)h.PointerToRawData + h.SizeOfRawData);
-                var where = at >= end ? "overlay" : section != null ? $"section {section.DisplayName}" : "headers";
-                long end2 = at + Math.Min(pe.Size, file.Length - at);
-                while (open.Count > 0 && open.Peek().End < end2) open.Pop(); // ends before this one does: does not contain it
-                var c = new Carved(m, where, at, pe.Size, pe.Machine, pe.Dll, file) { Parent = open.Count > 0 ? open.Peek().Start : null };
-                open.Push((at, end2));
-                yield return c;
+                long end = at + Math.Min(pe.Size, file.Length - at);
+                while (open.Count > 0 && open.Peek().End < end) open.Pop(); // ends before this one does: does not contain it
+                long? parent = open.Count > 0 ? open.Peek().Start : null;
+                open.Push((at, end));
+                yield return (at, pe, parent);
             }
             int next = file.AsSpan(at + 1).IndexOf("MZ"u8);
             at = next < 0 ? -1 : at + 1 + next;
         }
+    }
+
+    /// <summary>A PE found in a file carve_file reads (a file open() refuses: a native dropper, say).</summary>
+    public sealed record FileCarve(string Path, string Location, long Offset, long Size, ushort Machine, bool IsDll, long? Parent, byte[] Source)
+    {
+        public ReadOnlySpan<byte> Slice() => Source.AsSpan((int)Offset, (int)Math.Min(Size, Source.Length - Offset));
+    }
+
+    // The PEs in a file's bytes, the file itself included (offset 0): what embedded_pes finds in a module's file bytes,
+    // for a file that is no module. Read once, like open(); nothing is written.
+    static IEnumerable<FileCarve> CarveFile(string path)
+    {
+        path = Path.GetFullPath(path);
+        var info = new FileInfo(path);
+        if (!info.Exists) throw new SqlException($"carve_file: no file {path}");
+        if (info.Length > int.MaxValue) throw new SqlException($"carve_file: {path} is larger than 2 GB");
+        var file = File.ReadAllBytes(path);
+        long outer = Header(file, 0) is { } self ? self.Size : 0;
+        foreach (var (at, pe, parent) in PesIn(file, 0, (_, _) => true))
+            yield return new FileCarve(path, at == 0 ? "the file" : outer > 0 && at >= outer ? "overlay" : outer > 0 ? "inside the file's image" : "file bytes",
+                at, pe.Size, pe.Machine, pe.Dll, parent, file);
     }
 
     // A blob that is a PE, as it is or behind gzip/zlib/deflate (at the start or after a 4-byte length); else null.
@@ -657,6 +726,103 @@ public static class ProtectionTables
                     return true;
         }
         return false;
+    }
+
+    // ---- IL virtualization ----------------------------------------------------------------------------------------------
+
+    /// <summary>A dispatcher of an IL virtual machine and the methods virtualized into it (with the id each passes, when it is a constant).</summary>
+    public sealed record Virtualized(MethodDef Dispatcher, IReadOnlyDictionary<MethodDef, int?> Stubs, bool HandlerLoop);
+
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LoadedModule, Tuple<int, List<Virtualized>>> _vms = new();
+
+    /// <summary>
+    /// Dispatchers that ten or more methods (or a fifth of them, and three at least) are stubs into: a body of at most 40
+    /// instructions whose one call into the module is to the dispatcher, after an object[] of the arguments and an integer
+    /// id or a type token. That is what IL virtualizers leave of a method; the shape names no product.
+    /// </summary>
+    internal static List<Virtualized> Virtualization(LoadedModule m)
+    {
+        if (_vms.TryGetValue(m, out var hit) && hit.Item1 == m.Revision) return hit.Item2;
+        var stubs = new Dictionary<MethodDef, Dictionary<MethodDef, int?>>();
+        int bodied = 0;
+        foreach (var meth in m.Module.GetTypes().SelectMany(t => t.Methods))
+        {
+            if (!TryBody(meth, out var ins)) continue;
+            bodied++;
+            if (Stub(meth, ins) is var (d, id)) (stubs.TryGetValue(d, out var list) ? list : stubs[d] = new())[meth] = id;
+        }
+        var result = stubs.Where(kv => kv.Value.Count >= 10 || kv.Value.Count >= 3 && kv.Value.Count * 5 >= bodied)
+            .Select(kv => new Virtualized(kv.Key, kv.Value, HandlerLoop(kv.Key, 0))).ToList();
+        _vms.AddOrUpdate(m, Tuple.Create(m.Revision, result));
+        return result;
+    }
+
+    static (MethodDef Dispatcher, int? Id)? Stub(MethodDef meth, IList<Instruction> ins)
+    {
+        if (ins.Count > 40) return null;
+        MethodDef? target = null;
+        int array = -1;
+        bool token = false;
+        for (int i = 0; i < ins.Count; i++)
+        {
+            var x = ins[i];
+            if (x.OpCode.Code == Code.Newarr && (x.Operand as ITypeDefOrRef)?.FullName == "System.Object") array = i;
+            else if (x.OpCode.Code == Code.Ldtoken) token = true;
+            else if (x.OpCode.Code is Code.Call or Code.Callvirt or Code.Newobj && x.Operand is IMethod im)
+            {
+                MethodDef? d;
+                try { d = im.ResolveMethodDef(); } catch (Exception) { d = null; }
+                if (d == null || d.Module != meth.Module) continue; // the framework: boxing helpers, GetTypeFromHandle
+                if (target != null && target != d || d == meth) return null;
+                target = d;
+            }
+        }
+        if (target == null || array < 0 || target.MethodSig?.Params.Any(p => p is SZArraySig { Next.ElementType: ElementType.Object }) != true) return null;
+        // the id: the constant pushed before the array's length (ldc id; ldc n; newarr object)
+        int? id = array >= 2 && ins[array - 1].IsLdcI4() && ins[array - 2].IsLdcI4() ? ins[array - 2].GetLdcI4Value() : null;
+        return id != null || token ? (target, id) : null;
+    }
+
+    // The VM's handler dispatch: a switch of 50 or more targets inside a loop, in the dispatcher or what it calls
+    static bool HandlerLoop(MethodDef d, int depth)
+    {
+        if (!TryBody(d, out var ins)) return false;
+        for (int i = 0; i < ins.Count; i++)
+            if (ins[i].OpCode.Code == Code.Switch && ins[i].Operand is Instruction[] { Length: >= 50 }
+                && ins.Skip(i + 1).Any(x => x.Operand is Instruction t && x.OpCode.FlowControl is FlowControl.Branch or FlowControl.Cond_Branch && t.Offset <= ins[i].Offset))
+                return true;
+        return depth < 2 && ins.Select(x => x.Operand).OfType<IMethod>().Select(im => { try { return im.ResolveMethodDef(); } catch (Exception) { return null; } })
+            .OfType<MethodDef>().Where(c => c.Module == d.Module && c != d).Distinct().Take(50).Any(c => HandlerLoop(c, depth + 1));
+    }
+
+    // The dispatcher's namespace root when it is a readable name (KoiVM.Runtime -> KoiVM): identification, not a guess
+    static string VmName(MethodDef d)
+    {
+        var t = d.DeclaringType;
+        while (t?.DeclaringType != null) t = t.DeclaringType;
+        var root = (t?.Namespace.String ?? "").Split('.')[0];
+        return root.Length >= 3 && root.All(char.IsAsciiLetterOrDigit) && !Gibberish(root) ? root : "IL virtualization";
+    }
+
+    /// <summary>The note decompile() adds to a virtualized method's body, or null.</summary>
+    internal static string? VirtualizedNote(LoadedModule m, MethodDef meth) =>
+        Virtualization(m).FirstOrDefault(v => v.Stubs.ContainsKey(meth)) is { } vm
+            ? $"// dnspysql: virtualized: this body only calls {vm.Dispatcher.FullName}{(vm.Stubs[meth] is int id ? $" with id {id}" : "")}; its real code " +
+              "is bytecode of an IL virtual machine, which no decompiler shows."
+            : null;
+
+    // A section that is mostly random bytes (encrypted code), the largest one: its name, size and entropy
+    static (string? Name, long Size, double Entropy) HighEntropySection(LoadedModule m)
+    {
+        var file = m.DiskBytes;
+        foreach (var h in m.FileMetadata.PEImage.ImageSectionHeaders.OrderByDescending(h => h.SizeOfRawData))
+        {
+            long at = h.PointerToRawData, size = Math.Min(h.SizeOfRawData, file.Length - at);
+            if (at <= 0 || size < 4096) continue;
+            var e = Overlay.Entropy(file.AsSpan((int)at, (int)Math.Min(size, 1 << 20)));
+            if (e > 7.5) return (h.DisplayName, size, e);
+        }
+        return default;
     }
 
     // ldc ldc op: a binary operation on two constants, which no compiler leaves unfolded

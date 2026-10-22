@@ -141,12 +141,14 @@ public static class EditFunctions
             return n;
         }, "replace_string(old, new [, module])", "rewrite every ldstr equal to old; returns the number changed", "edit", mutates: true);
 
-        s.Fn("inline_strings", 0, 2, a => InlineStrings(s, ws.ModuleArg(a.Arg(0)), ws.HandleArg(a.Arg(1))),
-            "inline_strings([module [, decryptor]])",
+        s.Fn("inline_strings", 0, 3, a => InlineStrings(s, ws.ModuleArg(a.Arg(0)), ws.HandleArg(a.Arg(1)), (Values.ToText(a.Arg(2)) ?? "code").ToLowerInvariant()),
+            "inline_strings([module [, decryptor [, mode]]])",
             "replace every string decryptor call that decryptor_calls interprets (emulation = 'ok', a string; library decryptors left " +
             "out) with ldstr of its plaintext, so decompile() and a save() for dnSpy show the strings; the literal arguments become " +
-            "nops; a site code jumps into is left, with a note. decryptor = a method handle takes that method only. One undoable step; " +
-            "returns the number of call sites replaced",
+            "nops; a site code jumps into is left, with a note. decryptor = a method handle takes that method only (NULL: every one). " +
+            "mode: code (default) | comment (no code change: the plaintext becomes a comment at each call, which save() writes for " +
+            "dnSpy) | both (code where it can, a comment at the sites code jumps into, as in flattened control flow). One undoable step; " +
+            "returns the number of call sites replaced or commented",
             "edit", mutates: true);
 
         // ---- namespaces (dnSpy Namespace commands) ----
@@ -233,8 +235,9 @@ public static class EditFunctions
 
     // What decryptor_calls computed, put where the code asks for it: each call site that interprets to a string becomes
     // ldstr. Driven by the interpreter and the call shape only, so it is the same for every protector.
-    static long InlineStrings(Session s, LoadedModule lm, long? decryptor)
+    static long InlineStrings(Session s, LoadedModule lm, long? decryptor, string mode)
     {
+        if (mode is not ("code" or "comment" or "both")) throw new SqlException($"inline_strings: mode '{mode}' is not code, comment or both");
         var sites = new List<(MethodDef Caller, Instruction Call, int Args, string Text)>();
         int skipped = 0;
         // every plaintext first: the first edit starts the interpreter afresh
@@ -246,13 +249,16 @@ public static class EditFunctions
                 || !ReferenceEquals(ins[c.Site.Index].Operand, c.Site.Operand)) { skipped++; continue; }
             sites.Add((c.Site.From, ins[c.Site.Index], c.Args.Count, text));
         }
+        if (mode == "comment") return Comment(s, lm, sites.Select(x => (x.Caller, x.Call.Offset, x.Text)).ToList());
         long done = 0;
         int shared = 0;
+        var annotate = new List<(MethodDef Caller, Instruction Call, int Args, string Text)>(); // offsets read after the edits move them
         foreach (var g in sites.GroupBy(x => x.Caller))
         {
             var targets = Targets(g.Key.Body);
             var clean = g.Where(x => Clean(g.Key.Body, x.Call, x.Args, targets) is not null).ToList();
             shared += g.Count() - clean.Count;
+            if (mode == "both") annotate.AddRange(g.Except(clean));
             if (clean.Count == 0) continue;
             BodyEditor.Edit(s, g.Key, "inline_strings", b =>
             {
@@ -266,10 +272,35 @@ public static class EditFunctions
         }
         if (skipped > 0)
             s.Notices.Add($"inline_strings: {skipped} call site(s) left as they are (not interpreted, or not a string: see decryptor_calls.emulation)");
-        if (shared > 0)
+        if (annotate.Count > 0) done += Comment(s, lm, annotate.Select(x => (x.Caller, x.Call.Offset, x.Text)).ToList());
+        else if (shared > 0)
             s.Notices.Add($"inline_strings: {shared} call site(s) left as they are: code jumps into their arguments, so other paths pass other " +
-                          "values (flattened control flow); their plaintexts are in decryptor_calls");
+                          "values (flattened control flow); their plaintexts are in decryptor_calls, and inline_strings(module, decryptor, 'both') " +
+                          "writes them as comments there");
         return done;
+    }
+
+    // The plaintext as a comment at each call (the comments table, which save() writes as XML documentation for dnSpy):
+    // for code a rewrite would break, or when the code must stay as it is. One undoable step with the statement's edits.
+    static long Comment(Session s, LoadedModule lm, List<(MethodDef Caller, uint Offset, string Text)> sites)
+    {
+        var added = new List<CommentRec>();
+        var replaced = new List<CommentRec>();
+        foreach (var (caller, offset, text) in sites)
+        {
+            var at = AnnotationTables.Loc(s, lm.H(caller), (long)offset);
+            replaced.AddRange(s.Store.Comments.Where(c => c.At.Mvid == at.Mvid && c.At.Token == at.Token && c.At.Offset == at.Offset));
+            s.Store.Comments.RemoveAll(c => c.At.Mvid == at.Mvid && c.At.Token == at.Token && c.At.Offset == at.Offset);
+            var shown = text.Length > 500 ? text[..500] + "…" : text;
+            var rec = new CommentRec { Id = s.Store.NewId(), At = at, Text = $"decrypted: \"{Output.Visible(shown)}\"" };
+            s.Store.Comments.Add(rec);
+            added.Add(rec);
+        }
+        s.Store.Changed();
+        s.Ws.Record("comments", $"inline_strings: {added.Count} comment(s)",
+            () => { foreach (var c in added) s.Store.Comments.Remove(c); s.Store.Comments.AddRange(replaced); s.Store.Changed(); },
+            () => { foreach (var c in replaced) s.Store.Comments.Remove(c); s.Store.Comments.AddRange(added); s.Store.Changed(); });
+        return added.Count;
     }
 
     // a string where the code expects one: string, object, or a generic T the call site instantiates with string

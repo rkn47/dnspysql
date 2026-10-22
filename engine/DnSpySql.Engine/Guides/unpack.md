@@ -22,6 +22,9 @@ SELECT path, size, entropy FROM file_map WHERE kind = 'gap' AND NOT all_zero ORD
 | anti-tamper, many invalid bodies | `SELECT untamper()`: returns the decrypted module's id |
 | anti-tamper, every body decodes | nothing to decrypt: the protection's code is there, its effect is not |
 | `embedded_pes` rows | `SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet`: one module per stage, named from its hash |
+| stub assembly (no method body) | its code is elsewhere: the largest .NET row of `embedded_pes`, or an encrypted section |
+| virtualization | the methods only hand an id to a dispatcher: their code is VM bytecode, which no decompiler shows; trace them in dnSpy |
+| `open()` refuses a native PE | `SELECT offset, size, is_dotnet FROM carve_file WHERE path = '...'`, then `open_bytes(data)` of a .NET row |
 | resource with content_type high entropy, gzip, zlib | find the loader, then rebuild its decode chain in SQL |
 | images a loader reads pixel by pixel | `image_pixels()` |
 | `bundle_entries` rows | `open_bundle_entry('Name.dll')` |
@@ -42,6 +45,9 @@ SELECT decrypt(data, 'aes', substr(k, 1, 32), substr(k, 33, 16)) FROM resources,
 SELECT open_bytes(substr(px, 5, int_at(px, 0, 4)), 'stage2.dll')
   FROM (SELECT image_pixels(data, 'rgb') AS px FROM resource_images WHERE element = 'logo');
 ```
+
+A payload decoded by hand is not in any module's file as it is: give its parent, `open_bytes(blob, 'name', 0, <module>)`,
+so `modules.derived_from` (and `close(<module>)`) include it.
 
 `decrypt` returns NULL when the padding check fails (wrong key, iv or mode). When the decoder is too involved to
 rebuild, interpret it: `emulate(resolve('Ns.Loader::Decode'), <literal args>)`; what it cannot interpret (P/Invoke,

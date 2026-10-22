@@ -293,7 +293,13 @@ public sealed class Workspace : IWriteSink, IDisposable
             try { module = ModuleDefMD.Load(bytes, opts); }
             catch when (opts.PdbFileOrData != null) { opts.PdbFileOrData = null; module = ModuleDefMD.Load(bytes, opts); }
         }
-        catch (Exception e) when (NotDotNet(bytes) is string why) { throw new SqlException(why + $" ({e.Message})"); }
+        catch (Exception e) when (NotDotNet(bytes) is string why)
+        {
+            // a native dropper may still carry a .NET payload: the raw search that needs no module
+            var carve = filePath != null && why.Contains(": native ", StringComparison.Ordinal)
+                ? $"; to look for PE files inside it: SELECT offset, size, is_dotnet FROM carve_file WHERE path = '{filePath.Replace("'", "''")}'" : "";
+            throw new SqlException(why + $" ({e.Message}){carve}");
+        }
         catch (BadImageFormatException) when (ClrHeaderRepair.TryRepair(bytes, out var note) is byte[] fixedBytes)
         {
             opts.PdbFileOrData = null;

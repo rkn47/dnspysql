@@ -139,7 +139,7 @@ public sealed class DecompilerService
     // as empty or garbage methods, which reads as real code. Say so, after the code, so dnSpy's line numbers stay.
     static string? Note(LoadedModule lm, IMDTokenProvider entity)
     {
-        try { return Undecodable(lm, entity); }
+        try { return Undecodable(lm, entity) ?? (entity is MethodDef md ? DnSpySql.Tables.ProtectionTables.VirtualizedNote(lm, md) : null); }
         catch (Exception e) when (e is not OutOfMemoryException) { return null; } // a note must never cost the decompilation
     }
 
