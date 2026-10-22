@@ -129,25 +129,36 @@ public sealed class Session : IDisposable
 
     void ApplyClose()
     {
-        var ids = _closing.ToList();
-        _closing.Clear();
-        var closing = Ws.Modules.Where(m => ids.Contains(m.Id)).ToList();
-        if (closing.Count == 0) return;
-        foreach (var m in closing) ParkedModules.Add(DnSpySettings.ExportMarker(this, m));
         long before = Environment.WorkingSet;
-        Ws.Close(ids);
-        Index.Reset();
-        Decompiler.Forget(ids);
-        Emulator.Reset(this);
-        // dnlib's modules and the file bytes sit on the large object heap, which a collection does not compact by itself:
-        // without this the memory stays with the process and closing frees nothing anyone can see
+        var closed = Release();
+        if (closed.Count == 0) return;
+        // The file bytes sit on the large object heap, which a collection does not compact by itself, and the GC keeps the
+        // memory it freed for later: an aggressive collection compacts both and hands the memory back to the system, or
+        // closing frees nothing anyone can see.
         System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        GC.Collect();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         long after = Environment.WorkingSet;
-        Notices.Add($"close: closed module{(closing.Count > 1 ? "s" : "")} {string.Join(", ", closing.Select(m => m.Id))}; the process holds " +
+        Notices.Add($"close: closed module{(closed.Count > 1 ? "s" : "")} {string.Join(", ", closed)}; the process holds " +
                     $"{after >> 20:N0} MB ({Math.Max(0, before - after) >> 20:N0} MB freed)");
+    }
+
+    // Takes the modules out and lets go of everything that knew them. A method of its own, so that no local of it (the
+    // modules themselves) is still on the stack while the collection runs: they would all survive it.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    List<int> Release()
+    {
+        var ids = _closing.ToList();
+        _closing.Clear();
+        var closed = Ws.Modules.Where(m => ids.Contains(m.Id)).Select(m => m.Id).ToList();
+        if (closed.Count == 0) return closed;
+        foreach (var m in Ws.Modules.Where(m => closed.Contains(m.Id))) ParkedModules.Add(DnSpySettings.ExportMarker(this, m));
+        Ws.Close(closed);
+        Index.Reset();
+        Decompiler.Forget(closed);
+        Emulator.Reset(this);
+        return closed;
     }
 
     // Warned once each time the process crosses the threshold, so an MCP client can tell the user before the machine runs

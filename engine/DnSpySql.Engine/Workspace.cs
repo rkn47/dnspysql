@@ -64,6 +64,8 @@ public sealed class LoadedModule
     /// <summary>The single-file bundle this module was taken from (see Bundle), and the host file's bytes.</summary>
     public BundleInfo? Bundle { get; internal set; }
     public byte[]? BundleHost { get; internal set; }
+    /// <summary>The bundle's other app assemblies, registered with the resolver while this module is open.</summary>
+    internal List<AssemblyDef> BundleDeps { get; set; } = [];
     /// <summary>Where annotations and project files belong: the bundle on disk, or the module's own path.</summary>
     public string DiskPath => Bundle?.HostPath ?? Path;
     /// <summary>Marks the module edited (dirty, new revision); same as Workspace.Touch.</summary>
@@ -163,17 +165,20 @@ public sealed class Workspace : IWriteSink, IDisposable
     LoadedModule OpenBundle(string path, byte[] host, BundleInfo bundle)
     {
         var main = Bundle.MainAssembly(bundle) ?? throw new SqlException($"{path} is a single-file bundle without managed assemblies");
+        var deps = new List<AssemblyDef>();
         foreach (var e in bundle.Entries.Where(e => e.Type == 1 && e != main && !Bundle.IsFramework(e)))
         {
             try
             {
                 var dep = ModuleDefMD.Load(Bundle.Extract(host, e), new ModuleCreationOptions(Context) { TryToLoadPdbFromDisk = false });
                 dep.Location = $"{path}!/{e.Path}";
-                if (dep.Assembly != null) Resolver.AddToCache(dep);
+                if (dep.Assembly != null) { Resolver.AddToCache(dep); deps.Add(dep.Assembly); }
             }
             catch (Exception ex) when (ex is BadImageFormatException or InvalidDataException or IOException) { }
         }
-        return OpenBundleEntry(path, host, bundle, main);
+        var lm = OpenBundleEntry(path, host, bundle, main);
+        lm.BundleDeps = deps;
+        return lm;
     }
 
     public LoadedModule OpenBundleEntry(string path, byte[] host, BundleInfo bundle, BundleEntry entry)
@@ -183,6 +188,8 @@ public sealed class Workspace : IWriteSink, IDisposable
         lm.Origin = "bundle";
         lm.Bundle = bundle;
         lm.BundleHost = host;
+        // another entry of a bundle already open resolves into the same app assemblies, so it keeps them registered too
+        if (lm.BundleDeps.Count == 0 && _modules.FirstOrDefault(m => m != lm && m.Bundle?.HostPath == bundle.HostPath) is { } sibling) lm.BundleDeps = sibling.BundleDeps;
         return lm;
     }
 
@@ -409,6 +416,10 @@ public sealed class Workspace : IWriteSink, IDisposable
             Resolver.Remove(m.Module);
             m.Module.Dispose();
         }
+        // and what their references loaded from disk (framework and side-by-side assemblies, each a whole module): the
+        // resolver loads one again when an open module asks for it
+        var keep = _modules.SelectMany(m => m.BundleDeps.Append(m.Module.Assembly)).OfType<AssemblyDef>().ToHashSet();
+        foreach (var asm in Resolver.GetCachedAssemblies().Where(a => !keep.Contains(a)).ToList()) Resolver.Remove(asm);
         _memo.Clear(); // references of the other modules resolved into these
         foreach (var e in UndoStack.Concat(RedoStack))
             if (e.ClosedModule == null && _groupModules.TryGetValue(e.Group, out var touched))
@@ -613,6 +624,11 @@ public sealed class SafeAssemblyResolver : AssemblyResolver, IAssemblyResolver
     // both: callers through IAssemblyResolver (dnlib, the decompiler) and through Workspace.Resolver
     AssemblyDef? IAssemblyResolver.Resolve(IAssembly assembly, ModuleDef sourceModule) => Plain(assembly) ? base.Resolve(assembly, sourceModule) : null;
     public new AssemblyDef? Resolve(IAssembly assembly, ModuleDef sourceModule) => Plain(assembly) ? base.Resolve(assembly, sourceModule) : null;
+
+    // dnlib keeps each module's search paths in a dictionary keyed by the module, for the resolver's life: every module
+    // that ever resolved a reference stayed reachable, and close() freed almost nothing. The same cache, weakly keyed.
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<ModuleDef, IList<string>> _searchPaths = new();
+    protected override IEnumerable<string> GetModuleSearchPaths(ModuleDef module) => _searchPaths.GetValue(module, m => GetModulePrivateSearchPaths(m).ToList());
 }
 
 // dnlib resolves a TypeRef or MemberRef by searching the target assembly each time; the decompiler asks for the
