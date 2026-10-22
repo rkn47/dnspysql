@@ -345,6 +345,15 @@ public static class ProtectionTables
 
     const int MaxCarved = 256 << 20;
 
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LoadedModule, HashSet<string>> _carvedHashes = new();
+
+    /// <summary>The SHA-256 (upper-case hex) of every PE carved from the module, worked out once: where a stage came from.</summary>
+    internal static HashSet<string> CarvedHashes(LoadedModule m) => _carvedHashes.GetValue(m, lm =>
+    {
+        try { return Carve(lm).Select(c => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(c.Slice()))).ToHashSet(StringComparer.Ordinal); }
+        catch (Exception) { return []; } // a module whose resources do not read carries nothing found here
+    });
+
     internal static IEnumerable<Carved> Carve(LoadedModule m)
     {
         var seen = new HashSet<string>();

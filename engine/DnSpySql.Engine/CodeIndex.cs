@@ -35,6 +35,13 @@ public sealed class CodeIndex
     public CodeIndex(Session s) { _s = s; }
 
     public void Invalidate() => _builtAt = -1;
+
+    /// <summary>Invalidates and lets go of the index now (it holds every method of every module: close() frees that).</summary>
+    public void Reset()
+    {
+        _builtAt = -1;
+        (_all, _byFrom, _byTo, _byName) = (new(), new(), new(), new(StringComparer.Ordinal));
+    }
     public void InvalidateIfChanged() { if (_builtAt != _s.Ws.Revision) _builtAt = -1; }
 
     void Ensure()

@@ -19,6 +19,10 @@ tables and dnSpy's breakpoint configuration. Other guides: `SELECT topic, title 
 
 - `SELECT open('C:/abs/path/app.dll')` loads an assembly and returns its module id. `open_bytes`, `untamper` and
   `open_bundle_entry` add modules too. Once several are loaded, filter on `module`.
+- Memory is only released by closing: work sample by sample, open → `triage()` → close. `SELECT close(id)` takes a
+  module out with every module that came out of it (`modules.derived_from`: stages, the `untamper()` copy) when the
+  statement ends; `close_all()` closes everything but the project file's module. A module with unsaved edits is
+  refused (save or undo first). Ids are never reused.
 - The CLI runs one session per process: undo and unsaved edits end with it. Put a multi-step job in one process
   (several `-c`, or `-f script.sql`), or use the MCP or HTTP server.
 

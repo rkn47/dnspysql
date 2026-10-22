@@ -74,7 +74,8 @@ public static class MetaTables
                 doc: "assembly name dnSpy matches breakpoints and bookmarks against (with dnspy_target)")
             .Text("origin", m => m.Origin, doc: "file | bundle (an entry of a single-file app) | bytes (open_bytes) | untamper (the decrypted copy untamper() made)")
             .Int("derived_from", m => m.DerivedFrom,
-                doc: "the module this one came out of: the one untamper() decrypted, or the module whose file holds these bytes as they are (a carved stage); NULL otherwise");
+                doc: "the module this one came out of: the one untamper() decrypted, one embedded_pes carves these bytes from (also compressed or " +
+                     "in pieces) or whose file holds them as they are, or the parent given to open_bytes(); NULL otherwise. It may name a module closed since");
         db.Register(modules);
 
         // ---- assemblies ----
@@ -263,7 +264,14 @@ public static class MetaTables
             Add("tool_name", Session.ToolName, "string");
             Add("tool_version", Session.ToolVersion, "string");
             Add("tool_commit", Session.ToolCommit, "string");
+            Memory();
             return list;
+        }
+        // what the session holds: close() modules when this grows (an MCP session keeps every module it opened otherwise)
+        void Memory()
+        {
+            Add("session_memory_mb", (Environment.WorkingSet >> 20).ToString(), "int");
+            Add("managed_heap_mb", (GC.GetTotalMemory(false) >> 20).ToString(), "int");
         }
         var md = lm.Module;
         var pe = md.Metadata.PEImage;
@@ -287,6 +295,7 @@ public static class MetaTables
         Add("sha256", lm.Sha256, "string");
         Add("module_id", lm.Id.ToString(), "int");
         Add("module_count", ws.Modules.Count.ToString(), "int");
+        Memory();
         Add("assembly", md.Assembly?.FullName, "string");
         Add("mvid", md.Mvid?.ToString(), "string");
         Add("runtime_version", md.RuntimeVersion, "string");

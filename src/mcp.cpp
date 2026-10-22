@@ -57,6 +57,8 @@ const char* kQueryDoc =
     "session (it cannot be switched off). "
     "Load a sample with SELECT open('path'); it is only parsed, never run. A payload decoded with the data helpers loads as a module "
     "of its own with SELECT open_bytes(blob, 'name') (e.g. open_bytes(decompress(data)) on a resource). "
+    "Memory is only released by SELECT close(id), which takes a module and every stage that came out of it out of the session: "
+    "with several samples, close each one when you are done with it. "
     "Annotate for dnSpy: set_comment(handle, [il_offset,] text), tag(handle, tag), INSERT INTO bookmarks (handle, offset, name, "
     "category, comment), and rename obfuscated names with UPDATE types/methods/fields/params SET name = ... (rename parameters "
     "and methods before their type: resolve() takes current names and returns NULL for unknown ones). "

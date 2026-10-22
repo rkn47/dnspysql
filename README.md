@@ -458,7 +458,9 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
   searches the current module first; a name in several modules (an `untamper()` copy, a stage opened twice) gets a
   note, and `resolve(name, kind, module)` picks one.
 - **Modules.** `modules.origin` says how a module was opened (`file`, `bundle`, `bytes`, `untamper`) and
-  `derived_from` which module it came out of.
+  `derived_from` which module it came out of. `close(id)` takes a module out of the session with everything that came
+  out of it and frees their memory; a long session should close each sample when it is done with it. Module ids are
+  never reused, so a handle into a closed module is an error, not another module's entity.
 - **Call graphs.** `callers` also lists the calls that can reach a method through a base or interface method it
   overrides or implements (`via` = `virtual` or `interface`), since such a call site names that slot; `call_edges`
   and `xrefs` keep the reference as the IL has it.
@@ -478,7 +480,7 @@ By area; signatures are in [docs/SCHEMA.md](docs/SCHEMA.md).
 | area | functions |
 |---|---|
 | handles and names | `resolve`, `handle`, `token_of`, `module_of`, `kind_of`, `name_of`, `def_of`, `tok`, `hx`, `token_name`, `use_module` |
-| session | `open`, `open_bytes` (a decoded payload as a module, named from its hash; bytes already open return that module; a native PE gives NULL and a note), `open_bundle_entry` (an assembly inside a single-file bundle), `untamper` (anti-tampered bodies, decrypted statically), `save`, `save_raw`, `save_project`, `undo`, `redo`, `is_dirty`, `set_setting` |
+| session | `open`, `open_bytes` (a decoded payload as a module, named from its hash; bytes already open return that module; a native PE gives NULL and a note), `open_bundle_entry` (an assembly inside a single-file bundle), `untamper` (anti-tampered bodies, decrypted statically), `close` (a module and the stages that came out of it, freeing their memory), `close_all`, `save`, `save_raw`, `save_project`, `undo`, `redo`, `is_dirty`, `set_setting` |
 | decompiler | `decompile`, `il_text`, `decompile_module`, `export_project`, `api_doc` (dnSpy's tooltip text) |
 | raw bytes | `read_bytes`, `patch_bytes`, `method_bytes`, `rva_to_offset`, `offset_to_rva` |
 | editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `inline_strings` (decrypted strings into the code), `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |

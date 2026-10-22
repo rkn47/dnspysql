@@ -56,9 +56,10 @@ public static class CoreFunctions
         s.Fn("open", 1, 1, a => (long)s.Open(Str(a[0], "path")).Id, "open(path)", "load another assembly/module into the session; returns its module id", "session");
         // The next stage of a loader is usually a blob the SQL data helpers can already decode (decrypt, decompress,
         // base64_decode, xor): this loads it as a module of its own, so it can be queried, decompiled and saved.
-        s.Fn("open_bytes", 1, 3, a =>
+        s.Fn("open_bytes", 1, 4, a =>
         {
             if (a[0] == null) return null; // the decode step before it failed (decompress, decrypt, ... return NULL)
+            var parent = a.Arg(3) == null ? null : ws.ModuleArg(a[3]);
             var data = a[0] as byte[] ?? throw new SqlException("open_bytes(data): data must be a blob (decode it first: decompress, decrypt, base64_decode, ...)");
             var name = Values.ToText(a.Arg(1)) ?? $"memory-{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data))[..12].ToLowerInvariant()}.dll";
             // the same name again is the same module only if it is the same bytes (a payload decrypted again with another key is not)
@@ -78,13 +79,32 @@ public static class CoreFunctions
             {
                 if (!string.Equals(same.Path, name, StringComparison.OrdinalIgnoreCase))
                     s.Notices.Add($"open_bytes: {name}: the same bytes are open as module {same.Id} ({same.Path}); returned it");
+                if (parent != null && same.DerivedFrom == null && same.Origin == "bytes" && parent != same) same.DerivedFrom = parent.Id;
                 return (long)same.Id;
             }
-            return (long)s.OpenBytes(data, name, Values.ToLong(a.Arg(2)) == 1).Id;
-        }, "open_bytes(data [, name [, memory_layout]])",
+            return (long)s.OpenBytes(data, name, Values.ToLong(a.Arg(2)) == 1, parent: parent).Id;
+        }, "open_bytes(data [, name [, memory_layout [, parent]]])",
             "load a module from a blob, such as a payload decrypted or decompressed with SQL; it is only parsed, never run. " +
             "The name defaults to memory-<sha256 prefix>.dll, unique per payload; bytes already open return that module, with a note. " +
-            "memory_layout = 1 for an image dumped from memory. Returns its module id (NULL for NULL data, and for a native PE, with a note)", "session");
+            "memory_layout = 1 for an image dumped from memory. modules.derived_from names the module it came out of: found for a PE that " +
+            "embedded_pes carves (or one in a module's file as it is); pass parent for a payload decoded by hand. Returns its module id " +
+            "(NULL for NULL data, and for a native PE, with a note)", "session");
+        // A sample is rarely one module (untamper()'s copy, the stages it carries): closing one closes what came out of it,
+        // so a long MCP session can go sample by sample without holding every module it ever opened.
+        s.Fn("close", 1, 2, a =>
+        {
+            var ids = s.Close(ws.ModuleArg(a[0]), Values.ToLong(a.Arg(1)) is not 0);
+            return System.Text.Json.JsonSerializer.Serialize(ids);
+        }, "close(module [, with_derived])",
+            "take a module out of the session when you are done with it, with every module that came out of it (modules.derived_from: " +
+            "untamper()'s copy, stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It " +
+            "happens when the statement ends, with a note of the memory freed; ids are never reused, so a handle of a closed module stays an " +
+            "error. Refused for a module with unsaved edits (save() or undo() first) and for the one holding the project file. Returns the " +
+            "ids closed, as a JSON array", "session");
+        s.Fn("close_all", 0, 1, a => System.Text.Json.JsonSerializer.Serialize(s.CloseAll(Values.ToLong(a.Arg(0)) is 1)),
+            "close_all([keep_first])",
+            "close() every module: all but the one holding the project file (all of them with --no-project), and with keep_first = 1 " +
+            "all but the first one open. For bulk work: open a batch, analyze it, close_all(), the next batch. Returns the ids closed", "session");
         // Anti-tamper keeps method bodies encrypted in the file until a startup routine decrypts them in memory:
         // interpreting that routine over a copy of the image (Emulator.Untamper) gives the decrypted file.
         s.Fn("untamper", 0, 3, a =>

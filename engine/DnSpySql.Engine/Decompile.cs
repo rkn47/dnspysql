@@ -109,6 +109,16 @@ public sealed class DecompilerService
     const long MaxCachedChars = 64L << 20;
     long _cachedChars;
 
+    /// <summary>Drops what was decompiled from closed modules (close()).</summary>
+    public void Forget(IReadOnlyCollection<int> modules)
+    {
+        foreach (var k in _cache.Keys.Where(k => modules.Contains(Handle.Module(k.handle))).ToList())
+        {
+            _cachedChars -= _cache[k].Text.Length;
+            _cache.Remove(k);
+        }
+    }
+
     bool IsCached(long handle, string lang) =>
         _cache.ContainsKey((handle, lang, (long)_s.Ws.Get(Handle.Module(handle)).Revision * 1000 + _s.Ws.RefsVersion));
 

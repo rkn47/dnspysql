@@ -16,7 +16,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 |---|---|---|
 | Assembly / module documents, in-memory modules | `modules`, `assemblies`, `binary` | ✅ |
 | Anti-tamper: the decrypted module (dnSpy needs the process: debug, then open the module from memory) | `untamper()`: the startup routine that decrypts them, interpreted over a copy of the image, the result opened as a module | ✅ |
-| Open a module from memory or from a decoded blob | `open_bytes(data [, name [, memory_layout]])`: the blob a `decrypt`/`decompress`/`base64_decode` chain produced, or a memory dump (a native PE gives NULL and a note) | ✅ |
+| Open a module from memory or from a decoded blob | `open_bytes(data [, name [, memory_layout [, parent]]])`: the blob a `decrypt`/`decompress`/`base64_decode` chain produced, or a memory dump (a native PE gives NULL and a note) | ✅ |
 | Single-file bundles (the app host's embedded assemblies) | `bundle_entries`, `open_bundle_entry(path)` | ✅ |
 | Namespace nodes | `namespaces` | ✅ |
 | Type nodes (kind, visibility, layout, base, nested) | `types` | ✅ |
@@ -180,7 +180,7 @@ any debugger stops there.
 | Edit Assembly (name, version, culture, public key, hash alg, flags) | `UPDATE assemblies SET …` (rename fixes AssemblyRefs like dnSpy) | ✅ |
 | Edit Module (name, MVID, kind, runtime version, machine, characteristics, COR20 flags, entry point) | `UPDATE modules SET …` | ✅ |
 | Create Assembly / NetModule, convert, add/remove netmodule | — | ❌ |
-| Remove assembly from workspace | — (restart session) | ❌ |
+| Remove assembly from workspace (Close, Close All) | `close(module [, with_derived])` (with the stages and `untamper()` copy that came out of it), `close_all([keep_first])`; frees the memory, refused while a module has unsaved edits | ✅ |
 | Strip strong name (common RE task) | `strip_strong_name()` | ✅ |
 
 ### 2.2 Namespaces

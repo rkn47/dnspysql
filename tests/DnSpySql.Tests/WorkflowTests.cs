@@ -60,6 +60,81 @@ public sealed class WorkflowTests : SampleTest
         Assert.Equal(82, both.Long("select count(*) from modules"));
     }
 
+    [Fact]
+    public void A_stage_names_the_module_it_came_out_of_also_compressed_or_decoded_by_hand()
+    {
+        var stage = File.ReadAllBytes(TargetDll);
+        using var gz = new MemoryStream();
+        using (var z = new System.IO.Compression.GZipStream(gz, System.IO.Compression.CompressionLevel.SmallestSize)) z.Write(stage);
+        var half = PathIn("Half.dll");
+        var carrier = PathIn("Carrier.dll");
+        Run($"INSERT INTO resources(name, data) VALUES ('stage.gz', x'{Convert.ToHexString(gz.ToArray())}')", $"select save({Cli.Sql(half)})");
+        var other = (byte[])stage.Clone();
+        other[78] ^= 1; // another stage (a DOS-stub byte apart), so it is not the gzip one
+        Cli.Run(half, $"INSERT INTO resources(name, data) VALUES ('stage.bin', xor(x'{Convert.ToHexString(other)}', 90))", $"select save({Cli.Sql(carrier)})").Ok();
+        using var live = new Live(carrier, "--no-project");
+        // gzip: embedded_pes inflates it, so the stage's bytes are nowhere in the file as they are
+        Assert.Equal(2, live.Long("select open_bytes(data) from embedded_pes where module = 1 and is_dotnet"));
+        Assert.Equal(1, live.Long("select derived_from from modules where id = 2"));
+        live.Q("select close(2)");
+        // xor-encoded: decoded by hand, so only the caller knows where it came from
+        Assert.Null(live.Scalar("select derived_from from modules where id = (select open_bytes(xor(data, 90), 'by-hand.dll') from resources where name = 'stage.bin')"));
+        live.Q("select close(3)");
+        Assert.Equal(1, live.Long("select derived_from from modules where id = (select open_bytes(xor(data, 90), 'by-hand.dll', 0, 1) from resources where name = 'stage.bin')"));
+    }
+
+    [Fact]
+    public void Close_takes_a_sample_and_its_stages_out_and_never_reuses_their_ids()
+    {
+        var carrier = PathIn("Carrier.dll");
+        Run($"INSERT INTO resources(name, data) VALUES ('stage.dll', x'{Convert.ToHexString(File.ReadAllBytes(TargetDll))}')", $"select save({Cli.Sql(carrier)})");
+        using var live = new Live(carrier, "--no-project");
+        const string openStage = "select open_bytes(data) from embedded_pes where module = 1 and is_dotnet";
+        Assert.Equal(2, live.Long(openStage));
+        Assert.Equal("[2]", live.Scalar("select close(2, 0)"));
+        Assert.Equal(1, live.Long("select count(*) from modules"));
+        Assert.Contains("module 2 was closed", live.Error("select resolve('SampleTarget.Program', NULL, 2)"));
+        Assert.Contains("module 2 was closed", live.Error("select decompile(handle(2, 0x02000002))"));
+        Assert.Equal(3, live.Long(openStage)); // a new id: a handle kept from module 2 must not reach this one
+        var closed = live.Envelope("select close(1)"); // the sample and the stage that came out of it
+        Assert.Equal("[1,3]", closed.GetProperty("results")[0].GetProperty("rows")[0][0].GetString());
+        Assert.Contains("close: closed modules 1, 3", Notice(closed));
+        Assert.Equal(0, live.Long("select count(*) from modules"));
+        Assert.Equal(4, live.Long($"select open({Cli.Sql(carrier)})"));
+    }
+
+    [Fact]
+    public void Close_keeps_unsaved_work_annotations_and_the_undo_history_safe()
+    {
+        using (var project = new Live(Sample))
+            Assert.Contains("holds the session's project file", project.Error("select close(1)"));
+
+        var carrier = PathIn("Carrier.dll");
+        Run($"INSERT INTO resources(name, data) VALUES ('stage.dll', x'{Convert.ToHexString(File.ReadAllBytes(TargetDll))}')", $"select save({Cli.Sql(carrier)})");
+        var xml = PathIn("dnSpy.xml");
+        using var live = new Live(carrier, "--no-project", "--dnspy-xml", xml);
+        live.Q("select open_bytes(data) from embedded_pes where module = 1 and is_dotnet");
+        live.Q("update methods set name = 'Total' where module = 2 and name = 'Sum'");
+        Assert.Contains("unsaved edits", live.Error("select close(1)")); // its stage's
+        Assert.Contains("unsaved edits", live.Error("select close(2)"));
+        live.Q($"select save(2, {Cli.Sql(PathIn("Stage.saved.dll"))})");
+        live.Q("select bp_set(resolve('Sample.MemberCard::Checksum', NULL, 2))");
+        Assert.Contains("STAGE.SAVED.DLL", File.ReadAllText(xml).ToUpperInvariant());
+        live.Q("select close(2)");
+        // its breakpoint stays in dnSpy: a closed module cannot be named, but what was written for it is not taken back
+        live.Q("select bp_set(resolve('Sample.MemberCard::IsValid', NULL, 1))");
+        Assert.Contains("STAGE.SAVED.DLL", File.ReadAllText(xml).ToUpperInvariant());
+        Assert.Equal(2, live.Long("select count(*) from breakpoints"));
+        // undo: the breakpoints are annotations and go back; the rename was module 2's, which is gone, so undo says so
+        Assert.Equal(1, live.Long("select undo()"));
+        Assert.Equal(1, live.Long("select undo()"));
+        Assert.Contains("module 2, which close() removed", live.Error("select undo()"));
+        Assert.Equal(0, live.Long("select undo()"));
+
+        live.Q("select set_setting('max_modules', 1)");
+        Assert.Contains("close() the ones you are done with", live.Error($"select open({Cli.Sql(PathIn("Stage.saved.dll"))})"));
+    }
+
     static List<string> Next(Live live, long module) =>
         JsonDocument.Parse((string)live.Scalar($"select triage({module})")!).RootElement.GetProperty("next").EnumerateArray().Select(x => x.GetString()!).ToList();
 
@@ -82,10 +157,12 @@ public sealed class WorkflowTests : SampleTest
         var decompile = first.Single(n => n.Contains("the type with the most stored constants"));
         Assert.Contains("-- Sample.Gen`1:", decompile);
         Assert.Contains("class Gen<T>", (string)live.Scalar(Statement(decompile))!);
+        Assert.DoesNotContain(first, n => n.Contains("close(")); // its stage is not open yet
         foreach (var module in new long[] { 1, 2 }) // the stage the open_bytes() suggestion opens, too
             foreach (var n in module == 1 ? first : Next(live, module))
                 Assert.True(live.Error(Statement(n)) is null, $"{n}\n=> {live.Error(Statement(n))}");
-        Assert.Equal(2, live.Long("select count(*) from modules"));
+        // the stage's last suggestion closed it: nothing was left to open or decrypt
+        Assert.Equal(new object?[] { 1L }, live.Rows("select id from modules").Select(r => r[0]).ToArray());
     }
 
     [Fact]

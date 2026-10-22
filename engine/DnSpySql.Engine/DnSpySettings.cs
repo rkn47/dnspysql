@@ -85,6 +85,9 @@ public static class DnSpySettings
 
     static string FileOf(string? path) => (path ?? "")[((path ?? "").LastIndexOfAny(['/', '\\']) + 1)..].ToUpperInvariant();
 
+    /// <summary>What every key of a module's breakpoints and bookmarks contains (":FILE|assembly|"), for keeping them once it is closed.</summary>
+    internal static string ExportMarker(Session s, LoadedModule lm) => $":{FileOf(DnSpyTarget(s, lm))}|{lm.Module.Assembly?.FullName ?? ""}|";
+
     // Exports are remembered per target file (see ProjectStore.DnSpyExports), so the next export to the same file also
     // removes what DnSpySql wrote there before and no longer has: deleted breakpoints, or entries at a module's old path.
     internal static string ExportKey(string path) => Path.GetFullPath(path).ToUpperInvariant();
@@ -112,7 +115,12 @@ public static class DnSpySettings
         // Keys written by earlier exports to this file. A one-module export only owns that module's entries.
         var asmOnly = only == null ? null : "|" + (only.Module.Assembly?.FullName ?? "") + "|";
         var prevAll = s.Store.DnSpyExports.TryGetValue(ExportKey(path), out var p) ? p : [];
-        var prev = prevAll.Where(k => asmOnly == null || k.Contains(asmOnly, StringComparison.Ordinal)).ToHashSet();
+        // What an earlier export wrote for a module close() took out of the session stays: it cannot be named now, and
+        // closing a sample must not take its breakpoints and bookmarks out of dnSpy.
+        var loaded = s.Ws.Modules.Select(m => ExportMarker(s, m)).ToHashSet(StringComparer.Ordinal);
+        var parked = s.ParkedModules.Where(x => !loaded.Contains(x)).ToList();
+        var prev = prevAll.Where(k => (asmOnly == null || k.Contains(asmOnly, StringComparison.Ordinal))
+                                      && !parked.Any(a => k.Contains(a, StringComparison.Ordinal))).ToHashSet();
         var written = new HashSet<string>();
         // Removes the entries at our locations and the ones an earlier export wrote, then adds ours.
         void Merge(XElement? sect, string child, Func<XElement, string?> key, List<(string key, XElement e)> mine)

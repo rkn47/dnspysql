@@ -83,6 +83,8 @@ public sealed class JournalEntry
     public required Action Undo { get; init; }
     public required Action Redo { get; init; }
     public DateTime Time { get; init; } = DateTime.UtcNow;
+    /// <summary>A module its statement changed was closed since: replaying it would edit a disposed module.</summary>
+    public int? ClosedModule { get; set; }
 }
 
 /// <summary>The analysis session: loaded modules, resolver, undo journal.</summary>
@@ -98,6 +100,9 @@ public sealed class Workspace : IWriteSink, IDisposable
     public ModuleContext Context { get; }
     public SafeAssemblyResolver Resolver { get; }
     public int CurrentModuleId { get; set; } = 1;
+    /// <summary>Most modules open at once (runtime setting max_modules; 0 = no limit).</summary>
+    public int MaxModules { get; set; }
+    readonly MemoResolver _memo;
     public long Revision { get; private set; }
     public List<JournalEntry> UndoStack { get; } = new();
     public List<JournalEntry> RedoStack { get; } = new();
@@ -111,7 +116,8 @@ public sealed class Workspace : IWriteSink, IDisposable
     public Workspace()
     {
         Resolver = new SafeAssemblyResolver { EnableFrameworkRedirect = false, FindExactMatch = false, EnableTypeDefCache = true };
-        Context = new ModuleContext(Resolver, new MemoResolver(new Resolver(Resolver), () => Revision));
+        _memo = new MemoResolver(new Resolver(Resolver), () => Revision);
+        Context = new ModuleContext(Resolver, _memo);
         Resolver.DefaultModuleContext = Context;
         // dnlib finds the .NET Framework GAC (and Mono) but not the .NET Core shared framework, so references to
         // System.Runtime, System.Private.CoreLib or netstandard would stay unresolved, and the decompiler would then
@@ -199,7 +205,8 @@ public sealed class Workspace : IWriteSink, IDisposable
         return $"not a .NET assembly: native {(magic == 0x20B ? "PE32+" : "PE32")} {(dll ? "DLL" : "executable")} ({machine}) without a CLR header";
     }
 
-    public LoadedModule OpenBytes(byte[] bytes, string pseudoPath, bool memoryLayout = false, LoadedModule? untamperedFrom = null, uint untamperedBy = 0)
+    public LoadedModule OpenBytes(byte[] bytes, string pseudoPath, bool memoryLayout = false, LoadedModule? untamperedFrom = null, uint untamperedBy = 0,
+        LoadedModule? parent = null)
     {
         int count = _modules.Length;
         var lm = OpenBytesCore(bytes, pseudoPath, memoryLayout);
@@ -208,11 +215,19 @@ public sealed class Workspace : IWriteSink, IDisposable
         else
         {
             lm.Origin = "bytes";
-            // a stage carved from another module's file (embedded_pes, an uncompressed resource) is there byte for byte
-            if (!memoryLayout && bytes.Length >= 256)
-                lm.DerivedFrom = _modules.FirstOrDefault(m => m != lm && Contains(m.DiskBytes, bytes))?.Id;
+            lm.DerivedFrom = parent?.Id ?? (memoryLayout || bytes.Length < 256 ? null : Carrier(lm, bytes));
         }
         return lm;
+    }
+
+    // The module a stage came out of: one embedded_pes carves it from (a resource, also compressed or in pieces, or its
+    // file bytes), else one whose file holds it byte for byte (a resource read with SQL). A payload decoded by hand
+    // (decrypted, xored) is in neither: open_bytes() takes its parent as an argument.
+    int? Carrier(LoadedModule lm, byte[] bytes)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(bytes));
+        return _modules.FirstOrDefault(m => m != lm && Tables.ProtectionTables.CarvedHashes(m).Contains(hash))?.Id
+               ?? _modules.FirstOrDefault(m => m != lm && Contains(m.DiskBytes, bytes))?.Id;
     }
 
     // Where the blob's first 64 bytes occur, the rest compared; a bounded number of places, since crafted data (the same
@@ -253,6 +268,10 @@ public sealed class Workspace : IWriteSink, IDisposable
     {
         var existing = _modules.FirstOrDefault(m => string.Equals(m.Path, displayPath, StringComparison.OrdinalIgnoreCase));
         if (existing != null) return existing;
+        // a long session that forgets to close samples gets this instead of running the machine out of memory
+        if (MaxModules > 0 && _modules.Length >= MaxModules)
+            throw new SqlException($"{_modules.Length} modules are open (the process holds {Environment.WorkingSet >> 20:N0} MB): close() the ones you are " +
+                                   "done with, or raise the runtime setting max_modules");
         var opts = new ModuleCreationOptions(Context) { TryToLoadPdbFromDisk = false };
         if (filePath != null)
         {
@@ -318,7 +337,8 @@ public sealed class Workspace : IWriteSink, IDisposable
         RefsVersion++;
     }
 
-    public LoadedModule Get(int id) => _modules.FirstOrDefault(m => m.Id == id) ?? throw new SqlException($"no module with id {id}");
+    public LoadedModule Get(int id) => _modules.FirstOrDefault(m => m.Id == id)
+        ?? throw new SqlException(id > 0 && id <= _nextId ? $"module {id} was closed (close())" : $"no module with id {id}");
 
     public LoadedModule? Find(ModuleDef? module) => module == null ? null : _modules.FirstOrDefault(m => ReferenceEquals(m.Module, module));
 
@@ -360,8 +380,43 @@ public sealed class Workspace : IWriteSink, IDisposable
     public LoadedModule ModuleOf(IMemberDef? def) => Find(def?.Module) ?? throw new SqlException("member does not belong to a loaded module");
 
     /// <summary>Call after any mutation of a module's model.</summary>
-    public void Touch(LoadedModule lm) { lm.Dirty = true; lm.Revision++; Revision++; lm.Module.ResetTypeDefFindCache(); DnSpyDecompiler.ForgetTimeouts(); }
+    public void Touch(LoadedModule lm) { NoteEdit(lm); lm.Dirty = true; lm.Revision++; Revision++; lm.Module.ResetTypeDefFindCache(); DnSpyDecompiler.ForgetTimeouts(); }
     public void Touch(ModuleDef? m) { var lm = Find(m); if (lm != null) Touch(lm); }
+
+    // The modules each undo group (statement) changed, so closing one can take the groups that would replay into it out
+    // of the journal. Replays (undo/redo) touch modules too, but belong to the group they replay.
+    readonly Dictionary<long, HashSet<int>> _groupModules = new();
+
+    /// <summary>Records that the current statement changed this module (Touch does; raw patches, which leave the model alone, call it).</summary>
+    public void NoteEdit(LoadedModule lm)
+    {
+        if (_replaying) return;
+        if (!_groupModules.TryGetValue(_group, out var ids)) _groupModules[_group] = ids = new();
+        ids.Add(lm.Id);
+    }
+
+    /// <summary>
+    /// Takes modules out of the session (close()): the module list, the resolver's cache, and the journal, whose entries
+    /// for them are marked so undo()/redo() say so instead of editing a disposed module. Their ids are not used again.
+    /// </summary>
+    public void Close(IReadOnlyCollection<int> ids)
+    {
+        var gone = _modules.Where(m => ids.Contains(m.Id)).ToList();
+        if (gone.Count == 0) return;
+        _modules = _modules.Where(m => !ids.Contains(m.Id)).ToArray();
+        foreach (var m in gone)
+        {
+            Resolver.Remove(m.Module);
+            m.Module.Dispose();
+        }
+        _memo.Clear(); // references of the other modules resolved into these
+        foreach (var e in UndoStack.Concat(RedoStack))
+            if (e.ClosedModule == null && _groupModules.TryGetValue(e.Group, out var touched))
+                e.ClosedModule = touched.Where(ids.Contains).Select(id => (int?)id).FirstOrDefault();
+        if (_modules.Length > 0 && !_modules.Any(m => m.Id == CurrentModuleId)) CurrentModuleId = _modules.Min(m => m.Id);
+        Revision++;
+        RefsVersion++; // what references resolved to may have been in them
+    }
 
     // ---- undo journal (IWriteSink) ----
     // Tables that live in the project file, not the model: writing them changes no IL, name or reference, so it does not
@@ -389,6 +444,7 @@ public sealed class Workspace : IWriteSink, IDisposable
         while (n < count && UndoStack.Count > 0)
         {
             var g = UndoStack[^1].Group;
+            if (Dropped(UndoStack, g, "undo", n)) break;
             while (UndoStack.Count > 0 && UndoStack[^1].Group == g)
             {
                 var e = UndoStack[^1];
@@ -409,6 +465,7 @@ public sealed class Workspace : IWriteSink, IDisposable
         while (n < count && RedoStack.Count > 0)
         {
             var g = RedoStack[^1].Group;
+            if (Dropped(RedoStack, g, "redo", n)) break;
             while (RedoStack.Count > 0 && RedoStack[^1].Group == g)
             {
                 var e = RedoStack[^1];
@@ -421,6 +478,17 @@ public sealed class Workspace : IWriteSink, IDisposable
         }
         if (n > 0) TouchAllDirty();
         return n;
+    }
+
+    // A group that changed a module closed since is taken out of the history (it cannot be replayed): undo()/redo() stop
+    // there, and when it is the first group they reach they say so; called again, they go on to the group before it.
+    static bool Dropped(List<JournalEntry> stack, long group, string what, int done)
+    {
+        if (stack.LastOrDefault(e => e.Group == group && e.ClosedModule != null)?.ClosedModule is not int closed) return false;
+        stack.RemoveAll(e => e.Group == group);
+        if (done > 0) return true;
+        throw new SqlException($"{what}: the last change was to module {closed}, which close() removed; it is dropped from the {what} history, " +
+                               $"and {what}() again goes on to the change before it");
     }
 
     void TouchAllDirty() { Revision++; foreach (var m in _modules.Where(m => m.Dirty)) { m.Revision++; m.Module.ResetTypeDefFindCache(); } }
@@ -571,5 +639,7 @@ sealed class MemoResolver(IResolver inner, Func<long> version) : IResolver
 
     public IMemberForwarded? Resolve(MemberRef memberRef) =>
         Get(memberRef, () => inner.Resolve(memberRef));
+
+    public void Clear() => memo.Clear();
 }
 

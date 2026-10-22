@@ -269,6 +269,7 @@ public static class PeTables
         void Apply() { for (int i = 0; i < data.Length; i++) { if (m.DiskBytes[off + i] == data[i]) m.RawPatches.Remove(off + i); else m.RawPatches[off + i] = data[i]; } m.Revision++; }
         void Revert() { foreach (var (k, b) in before) { if (b is byte x) m.RawPatches[k] = x; else m.RawPatches.Remove(k); } m.Revision++; }
         Apply();
+        s.Ws.NoteEdit(m);
         s.Ws.Record("file_bytes", $"patch {data.Length} byte(s) at 0x{off:X}", Revert, Apply);
     }
 

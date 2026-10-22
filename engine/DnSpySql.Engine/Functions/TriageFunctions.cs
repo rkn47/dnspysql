@@ -157,6 +157,19 @@ public static class TriageFunctions
         }
 
         if (caps.Count > 0) next.Add($"SELECT kind, api, method_name, offset FROM capabilities WHERE module = {m.Id} AND NOT is_library  -- every capability site");
+        // Nothing left to open or decrypt: the last step is to close the sample, or a long session keeps every module it
+        // ever opened (memory is not released otherwise)
+        var open = s.Ws.Modules.Select(x => x.Sha256).ToHashSet(StringComparer.Ordinal);
+        bool pending = next.Any(n => n.StartsWith("SELECT untamper(", StringComparison.Ordinal))
+                       || o["embedded_pes"]!.AsArray().Any(x => x!["is_dotnet"]!.GetValue<bool>() && !open.Contains(x["sha256"]!.GetValue<string>()));
+        var family = new List<LoadedModule> { m };
+        for (int i = 0; i < family.Count; i++) family.AddRange(s.Ws.Modules.Where(x => x.DerivedFrom == family[i].Id && !family.Contains(x)));
+        if (!pending && family.All(s.Closable))
+        {
+            long mb = Math.Max(1, family.Sum(x => (long)x.DiskBytes.Length) >> 20);
+            next.Add($"SELECT close({m.Id})  -- done with this sample{(family.Count > 1 ? $" and the {family.Count - 1} module(s) that came out of it" : "")}: " +
+                     $"frees their memory ({mb:N0} MB of files)");
+        }
         o["next"] = Array(next.Select(x => (JsonNode?)x));
         return o;
     }

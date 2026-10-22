@@ -153,6 +153,13 @@ public sealed class Emulator
         }
     }
 
+    /// <summary>Lets go of the session's interpreter and the state it holds (static fields, an image copy, results): close() frees them.</summary>
+    public static void Reset(Session s)
+    {
+        if (!_sessions.TryGetValue(s, out var box)) return;
+        lock (box) { box.Value = null; box.Revision = -1; }
+    }
+
     readonly Dictionary<string, (object? Value, string? Error)> _memo = new(StringComparer.Ordinal);
 
     // The image anti-tamper code reads and decrypts through pointers: a copy of the file at a made-up base address.

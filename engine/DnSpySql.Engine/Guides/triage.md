@@ -54,3 +54,13 @@ Name a family only with evidence (config layout, distinctive strings, mutex form
 "consistent with", or "unknown". The report has: verdict and confidence, hashes, protection, a config table with
 sources, defanged indicators, capabilities with locations, what remains unknown, and what to open in dnSpy (full names
 and `tok()` tokens).
+
+## 6. Close the sample
+
+```sql
+SELECT close(<id>);          -- the module and every stage or untamper() copy that came out of it
+SELECT value FROM binary WHERE key = 'session_memory_mb';
+```
+
+A session keeps every module it opened until it is closed, so with many samples go one at a time: open, triage,
+report, close. `triage()` ends its `next` list with the `close()` once nothing is left to open or decrypt.
