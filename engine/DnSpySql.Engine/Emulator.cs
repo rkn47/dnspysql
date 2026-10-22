@@ -394,9 +394,13 @@ public sealed class Emulator
         char[] cs => new string(cs),
         bool b => b ? 1L : 0L,
         StringBuilder sb => sb.ToString(),
-        Array a => System.Text.Json.JsonSerializer.Serialize(a.Cast<object?>().Select(ToSql)),
+        Array a => System.Text.Json.JsonSerializer.Serialize(a.Cast<object?>().Select(ToSql), JsonFloats),
         _ => v.ToString(),
     };
+
+    // a double[] the code builds may hold NaN or an infinity, which plain JSON cannot write
+    static readonly System.Text.Json.JsonSerializerOptions JsonFloats =
+        new() { NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals };
 
     // ---- interpretation ----------------------------------------------------------------------------------------------
 

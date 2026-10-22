@@ -212,7 +212,7 @@ public static class TriageFunctions
         string str => str.Length > 2000 ? str[..2000] + "..." : str,
         long l => l,
         int i => i,
-        double d => d,
+        double d => double.IsFinite(d) ? d : d.ToString(System.Globalization.CultureInfo.InvariantCulture), // JSON has no Infinity or NaN
         bool b => b,
         byte[] bytes => $"x'{Convert.ToHexString(bytes.AsSpan(0, Math.Min(bytes.Length, 64)))}'{(bytes.Length > 64 ? $" ({bytes.Length} bytes)" : "")}",
         _ => Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture),

@@ -22,6 +22,17 @@ public sealed class TriageTests : SampleTest
     }
 
     [Fact]
+    public void Triage_writes_values_json_cannot_hold_as_text()
+    {
+        var r = Run("select add_type('public static class Limits { public static double Top = double.PositiveInfinity, Gap = double.NaN, " +
+                    "Low = double.NegativeInfinity, One = 1.5; }')", "select triage()");
+        var items = JsonDocument.Parse(r.Text(1)).RootElement.GetProperty("config_candidates").GetProperty("items").EnumerateArray()
+            .Where(c => c.GetProperty("type").GetString() == "Limits").ToDictionary(c => c.GetProperty("field").GetString()!, c => c.GetProperty("value"));
+        Assert.Equal("Infinity", items["Top"].GetString());
+        Assert.Equal(1.5, items["One"].GetDouble());
+    }
+
+    [Fact]
     public void Triage_summarizes_a_module_in_one_json_object()
     {
         var r = Run("select triage()", "select value from binary where key = 'sha256'", "select triage(1) = triage()");
