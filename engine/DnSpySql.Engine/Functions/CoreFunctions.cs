@@ -171,11 +171,12 @@ public static class CoreFunctions
         // argument is a module id.
         long Target(object?[] a) => a.Length > 1 && a[1] is long mod ? Handle.Make(ws.ModuleArg(mod).Id, (uint)Lng(a[0], "token")) : Lng(a[0], "handle");
         string? Lang(object?[] a) => a.Length == 3 || a.Length > 1 && a[1] is long ? Values.ToText(a.Arg(2)) : Values.ToText(a.Arg(1));
-        s.Fn("decompile", 1, 3, a => s.Decompiler.Decompile(Target(a), Lang(a)).Text,
+        // NULL in, NULL out: decompile((SELECT handle ... LIMIT 1)) on a module where nothing matches
+        s.Fn("decompile", 1, 3, a => a[0] == null ? null : s.Decompiler.Decompile(Target(a), Lang(a)).Text,
             "decompile(handle [, 'csharp'|'vb'|'il'])  or  decompile(token [, module [, lang]])",
             "decompile a type/method/field/property/event with dnSpy's engine (reflects edits). A failure comes back as text starting /* dnspysql: so bulk queries never abort",
             "decompiler");
-        s.Fn("il_text", 1, 2, a => s.Decompiler.Decompile(Target(a), "il").Text, "il_text(handle)  or  il_text(token [, module])", "ildasm-style disassembly", "decompiler");
+        s.Fn("il_text", 1, 2, a => a[0] == null ? null : s.Decompiler.Decompile(Target(a), "il").Text, "il_text(handle)  or  il_text(token [, module])", "ildasm-style disassembly", "decompiler");
         s.Fn("decompile_module", 0, 2, a => s.Decompiler.DecompileModule(ws.ModuleArg(a.Arg(0)), Values.ToText(a.Arg(1))),
             "decompile_module([module [, lang]])", "source for a whole module, assembled type by type (large!)", "decompiler");
         s.Fn("export_project", 1, 3, a =>

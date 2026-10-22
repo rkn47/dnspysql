@@ -293,6 +293,12 @@ public sealed class Workspace : IWriteSink, IDisposable
             try { module = ModuleDefMD.Load(bytes, opts); }
             catch when (opts.PdbFileOrData != null) { opts.PdbFileOrData = null; module = ModuleDefMD.Load(bytes, opts); }
         }
+        catch (Exception) when (DnSpySql.Bundle.AppHostTarget(bytes) is { } app)
+        {
+            // the launcher of a framework-dependent app: no .NET code of its own, the app is the assembly beside it
+            throw new SqlException("not a .NET assembly: the app host (launcher) of a framework-dependent .NET app, with no .NET code of its own; " +
+                                   (app.Length > 0 ? $"it starts {app}, which sits beside it: open that file" : "it starts an assembly beside it (same name, .dll): open that file"));
+        }
         catch (Exception e) when (NotDotNet(bytes) is string why)
         {
             // a native dropper may still carry a .NET payload: the raw search that needs no module

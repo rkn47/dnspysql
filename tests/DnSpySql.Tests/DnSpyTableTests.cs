@@ -222,6 +222,47 @@ public sealed class DnSpyTableTests : SampleTest
         return ms.ToArray();
     }
 
+    // A w x h RGB PNG (pixel x, y = x*30, y*40, x+y), plain or Adam7-interlaced: seven reduced images, scanlines unfiltered
+    static byte[] RgbPng(int w, int h, bool interlaced)
+    {
+        static void Chunk(Stream s, string type, byte[] data)
+        {
+            var len = BitConverter.GetBytes(data.Length); Array.Reverse(len); s.Write(len);
+            var td = System.Text.Encoding.ASCII.GetBytes(type).Concat(data).ToArray();
+            s.Write(td);
+            var crc = BitConverter.GetBytes(Crc32(td)); Array.Reverse(crc); s.Write(crc);
+        }
+        (int X0, int Y0, int Dx, int Dy)[] passes = interlaced
+            ? [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] : [(0, 0, 1, 1)];
+        var raw = new List<byte>();
+        foreach (var (x0, y0, dx, dy) in passes)
+            for (int y = y0; y < h; y += dy)
+            {
+                if (x0 >= w) break;
+                raw.Add(0);
+                for (int x = x0; x < w; x += dx) raw.AddRange([(byte)(x * 30), (byte)(y * 40), (byte)(x + y)]);
+            }
+        using var ms = new MemoryStream();
+        ms.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        Chunk(ms, "IHDR", [0, 0, 0, (byte)w, 0, 0, 0, (byte)h, 8, 2, 0, 0, (byte)(interlaced ? 1 : 0)]);
+        using var z = new MemoryStream();
+        using (var zs = new ZLibStream(z, CompressionLevel.Optimal, true)) zs.Write(raw.ToArray());
+        Chunk(ms, "IDAT", z.ToArray());
+        Chunk(ms, "IEND", []);
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void Interlaced_pngs_give_the_same_pixels()
+    {
+        var expected = string.Concat(Enumerable.Range(0, 5).SelectMany(y => Enumerable.Range(0, 7).Select(x => $"{(byte)(x * 30):X2}{(byte)(y * 40):X2}{(byte)(x + y):X2}")));
+        var r = Run($"select hex(image_pixels({Hex(RgbPng(7, 5, false))}, 'rgb'))", $"select hex(image_pixels({Hex(RgbPng(7, 5, true))}, 'rgb'))",
+                    $"select length(image_pixels({Hex(RgbPng(1, 1, true))}, 'rgb'))");
+        Assert.Equal(expected, r.Text(0));
+        Assert.Equal(expected, r.Text(1));
+        Assert.Equal(3, r.Long(2)); // only the first pass has a pixel
+    }
+
     static uint Crc32(byte[] d)
     {
         uint c = 0xFFFFFFFF;

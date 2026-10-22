@@ -863,6 +863,7 @@ public sealed class Emulator
         return f.FullName switch
         {
             "System.String System.String::Empty" => "",
+            "System.IntPtr System.IntPtr::Zero" or "System.UIntPtr System.UIntPtr::Zero" => 0L,
             "System.Boolean System.BitConverter::IsLittleEndian" => BitConverter.IsLittleEndian ? 1 : 0,
             _ => throw new Failed($"static field {f.FullName}"),
         };

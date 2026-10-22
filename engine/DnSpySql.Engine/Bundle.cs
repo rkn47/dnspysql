@@ -45,6 +45,24 @@ public static class Bundle
         }
     }
 
+    static readonly System.Text.RegularExpressions.Regex DllName = new(@"[\x20-\x7e]{1,255}?\.dll(?=\x00)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    static readonly System.Text.RegularExpressions.Regex SystemDll = new(@"(?i)^(api-ms-|ext-ms-|kernel32|user32|advapi32|shell32|ole32|oleaut32|ntdll|hostfxr|hostpolicy|coreclr|clrjit|msvc|vcruntime|ucrtbase|bcrypt|crypt32|ws2_32|version|shlwapi|gdi32|comctl32|mscoree)",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// For the app host of a framework-dependent app (the bundle signature with no manifest: nothing appended), the
+    /// assembly it starts, which the SDK writes into the host near the signature; "" when the name is not found; null
+    /// when the file is no app host.
+    /// </summary>
+    public static string? AppHostTarget(byte[] b)
+    {
+        int at = b.AsSpan().IndexOf(Signature);
+        if (at < 8 || BitConverter.ToInt64(b, at - 8) != 0 || Read("", b) != null) return null;
+        int from = Math.Max(0, at - 4096), len = Math.Min(b.Length, at + 4096) - from;
+        var window = Encoding.Latin1.GetString(b, from, len);
+        return DllName.Matches(window).Select(m => m.Value).FirstOrDefault(n => !SystemDll.IsMatch(n.Split('\\', '/')[^1])) ?? "";
+    }
+
     static BundleInfo? ReadAt(string hostPath, byte[] b, int sig)
     {
         if (sig < 8) return null;

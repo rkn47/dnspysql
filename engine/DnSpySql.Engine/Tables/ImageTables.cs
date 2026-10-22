@@ -236,14 +236,20 @@ public static class ImageTables
         }
         if (!header) throw new SqlException("PNG without an IHDR chunk");
         Check(w, h);
-        if (interlace != 0) throw new SqlException("interlaced PNG is not supported");
+        if (interlace is not (0 or 1)) throw new SqlException($"PNG interlace method {interlace}");
         int ch = color switch { 0 => 1, 2 => 3, 3 => 1, 4 => 2, 6 => 4, _ => throw new SqlException($"PNG color type {color}") };
         if (!(color switch { 0 => depth is 1 or 2 or 4 or 8 or 16, 3 => depth is 1 or 2 or 4 or 8, _ => depth is 8 or 16 }))
             throw new SqlException($"PNG bit depth {depth} for color type {color}");
         int bpp = Math.Max(1, ch * depth / 8);
+        // Adam7 stores the image as seven reduced images (start x, start y, step x, step y), each with its own scanlines;
+        // a plain PNG is one pass over every pixel. A pass with no pixel has no scanline.
+        (int X0, int Y0, int Dx, int Dy)[] passes = interlace == 0 ? [(0, 0, 1, 1)]
+            : [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
         // At most 64M pixels of at most 8 bytes, plus a filter byte per row: fits an int.
-        int stride = (int)(((long)w * ch * depth + 7) / 8);
-        long needed = (stride + 1L) * h;
+        long Stride(long pw) => (pw * ch * depth + 7) / 8;
+        long PassW((int X0, int Y0, int Dx, int Dy) p) => Math.Max(0, (w - p.X0 + p.Dx - 1) / p.Dx);
+        long PassH((int X0, int Y0, int Dx, int Dy) p) => Math.Max(0, (h - p.Y0 + p.Dy - 1) / p.Dy);
+        long needed = passes.Sum(p => PassW(p) == 0 ? 0 : (Stride(PassW(p)) + 1) * PassH(p));
         // Deflate expands at most about 1032:1, so a few compressed bytes cannot hold a large image: refuse before
         // allocating for it.
         if (needed > idat.Length * 1032 + 1024) throw new SqlException("truncated PNG data");
@@ -254,25 +260,41 @@ public static class ImageTables
         while (got < raw.Length && z.Read(raw, got, raw.Length - got) is var n && n > 0) got += n;
         if (got < raw.Length) throw new SqlException("truncated PNG data");
 
-        var cur = new byte[stride];
-        var prev = new byte[stride];
         var rgba = new byte[(long)w * h * 4];
-        for (int y = 0; y < h; y++)
+        int at = 0;
+        foreach (var pass in passes)
         {
-            int f = raw[y * (stride + 1)];
-            Array.Copy(raw, y * (stride + 1) + 1, cur, 0, stride);
-            for (int x = 0; x < stride; x++)
+            int pw = (int)PassW(pass), ph = (int)PassH(pass);
+            if (pw == 0 || ph == 0) continue;
+            int stride = (int)Stride(pw);
+            var cur = new byte[stride];
+            var prev = new byte[stride];
+            for (int py = 0; py < ph; py++, at += stride + 1)
             {
-                int a = x >= bpp ? cur[x - bpp] : 0, up = prev[x], c = x >= bpp ? prev[x - bpp] : 0;
-                cur[x] = (byte)(cur[x] + f switch
+                int f = raw[at];
+                Array.Copy(raw, at + 1, cur, 0, stride);
+                for (int x = 0; x < stride; x++)
                 {
-                    0 => 0, 1 => a, 2 => up, 3 => (a + up) / 2,
-                    4 => Paeth(a, up, c),
-                    _ => throw new SqlException($"bad PNG filter {f}"),
-                });
+                    int a = x >= bpp ? cur[x - bpp] : 0, up = prev[x], c = x >= bpp ? prev[x - bpp] : 0;
+                    cur[x] = (byte)(cur[x] + f switch
+                    {
+                        0 => 0, 1 => a, 2 => up, 3 => (a + up) / 2,
+                        4 => Paeth(a, up, c),
+                        _ => throw new SqlException($"bad PNG filter {f}"),
+                    });
+                }
+                Put(cur, py * pass.Dy + pass.Y0, pw, pass);
+                (prev, cur) = (cur, prev);
             }
-            for (int x = 0; x < w; x++)
+        }
+        return (w, h, rgba);
+
+        // one decoded scanline of a pass, into the image
+        void Put(byte[] cur, int y, int pw, (int X0, int Y0, int Dx, int Dy) pass)
+        {
+            for (int px = 0; px < pw; px++)
             {
+                int x = px;
                 int Sample(int k)
                 {
                     if (depth == 8) return cur[x * ch + k];
@@ -280,7 +302,7 @@ public static class ImageTables
                     int bitPos = (x * ch + k) * depth, v = cur[bitPos / 8] >> (8 - depth - bitPos % 8) & ((1 << depth) - 1);
                     return color == 3 ? v : v * 255 / ((1 << depth) - 1);
                 }
-                int o = (y * w + x) * 4;
+                int o = (y * w + px * pass.Dx + pass.X0) * 4;
                 switch (color)
                 {
                     case 0: rgba[o] = rgba[o + 1] = rgba[o + 2] = (byte)Sample(0); rgba[o + 3] = 255; break;
@@ -295,9 +317,7 @@ public static class ImageTables
                     default: rgba[o] = (byte)Sample(0); rgba[o + 1] = (byte)Sample(1); rgba[o + 2] = (byte)Sample(2); rgba[o + 3] = (byte)Sample(3); break;
                 }
             }
-            (prev, cur) = (cur, prev);
         }
-        return (w, h, rgba);
     }
 
     static int Paeth(int a, int b, int c)
