@@ -27,6 +27,26 @@ public sealed class EditTests : SampleTest
     }
 
     [Fact]
+    public void Added_generic_types_and_methods_keep_their_parameters()
+    {
+        var saved = PathIn("Generic.dll");
+        Run("select add_type('namespace Sample { public static class Gen<T> where T : class { public static T Last; " +
+            "public static U Echo<U>(U x) where U : struct => x; } }')", $"select save({Cli.Sql(saved)})");
+        var r = Cli.Run(saved, "select generic_param_count from types where full_name = 'Sample.Gen`1'",
+            "select generic_param_count from methods where name = 'Echo'",
+            "select owner_kind || ' ' || name || ': ' || constraints from generic_params where owner_name like '%Gen`1%' order by owner_kind desc",
+            "select decompile(resolve('Sample.Gen`1'))").Ok();
+        Assert.Equal(1, r.Long(0));
+        Assert.Equal(1, r.Long(1));
+        var gps = r.Rows(2).Select(x => x.EnumerateObject().Single().Value.GetString()!).ToList();
+        Assert.Equal(2, gps.Count);
+        Assert.StartsWith("type T: class", gps[0]);
+        Assert.StartsWith("method U: struct", gps[1]);
+        Assert.Contains("class Gen<T> where T : class", r.Text(3));
+        Assert.Matches(@"Echo<U>\(U \w+\) where U : struct", r.Text(3));
+    }
+
+    [Fact]
     public void A_session_can_be_locked_read_only_but_not_unlocked()
     {
         using var live = new Live(Sample, "--no-project");

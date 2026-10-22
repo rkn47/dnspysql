@@ -190,6 +190,7 @@ sealed class TypeSplicer
             {
                 var nm = new MethodDefUser(sm.Name) { ImplAttributes = sm.ImplAttributes, Attributes = sm.Attributes };
                 to.Methods.Add(nm);
+                CopyGenericParams(sm.GenericParameters, nm.GenericParameters);
                 methodMap[sm] = nm;
                 newMethods.Add((sm, nm));
             }
@@ -313,6 +314,7 @@ sealed class TypeSplicer
     {
         var clone = new TypeDefUser(src.Namespace, src.Name) { Attributes = src.Attributes };
         attach(clone);
+        CopyGenericParams(src.GenericParameters, clone.GenericParameters);
         typeMap[src] = clone;
         MapNewMembers(src, clone);
         foreach (var inner in src.NestedTypes.ToArray()) CloneNestedType(inner, clone);
@@ -338,7 +340,22 @@ sealed class TypeSplicer
         {
             var nm = new MethodDefUser(md.Name) { ImplAttributes = md.ImplAttributes, Attributes = md.Attributes };
             clone.Methods.Add(nm);
+            CopyGenericParams(md.GenericParameters, nm.GenericParameters);
             methodMap[md] = nm;
+        }
+    }
+
+    // A generic type or method keeps its parameters (Gen`1 without one, its fields typed !0, would not load); their
+    // constraints name types, so they are imported with the signatures, once every clone is mapped.
+    readonly List<(GenericParam src, GenericParam dst)> genericParams = [];
+
+    void CopyGenericParams(IList<GenericParam> from, IList<GenericParam> to)
+    {
+        foreach (var gp in from)
+        {
+            var ngp = new GenericParamUser(gp.Number, gp.Flags, gp.Name);
+            to.Add(ngp);
+            genericParams.Add((gp, ngp));
         }
     }
 
@@ -365,6 +382,9 @@ sealed class TypeSplicer
         // clone is imported (otherwise structs encode as classes -> "value type mismatch").
         foreach (var (src, clone) in cloned)
             clone.BaseType = ImportBaseType(src.BaseType);
+        foreach (var (src, dst) in genericParams)
+            foreach (var c in src.GenericParamConstraints)
+                dst.GenericParamConstraints.Add(new GenericParamConstraintUser(FixTypeDefOrRef(importer.Import(c.Constraint))));
         foreach (var (src, clone) in cloned)
         {
             clone.ClassLayout = src.ClassLayout == null ? null
