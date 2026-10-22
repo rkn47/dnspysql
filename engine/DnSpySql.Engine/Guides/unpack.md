@@ -26,7 +26,7 @@ SELECT path, size, entropy FROM file_map WHERE kind = 'gap' AND NOT all_zero ORD
 | virtualization | the methods only hand an id to a dispatcher: their code is VM bytecode, which no decompiler shows; trace them in dnSpy |
 | `open()` refuses a native PE | `SELECT offset, size, is_dotnet FROM carve_file WHERE path = '...'`, then `open_bytes(data)` of a .NET row |
 | resource with content_type high entropy, gzip, zlib | find the loader, then rebuild its decode chain in SQL |
-| images a loader reads pixel by pixel | `image_pixels()` |
+| images a loader reads pixel by pixel | `SELECT data FROM resource_images WHERE element = '...'` is the image file: decode its pixels as the loader does, outside DnSpySql, then `open_bytes()` the payload |
 | `bundle_entries` rows | `open_bundle_entry('Name.dll')` |
 
 ## Decode chains
@@ -42,8 +42,6 @@ SELECT open_bytes(decompress(decrypt(substr(b, 17), 'aes', unhex(sha256('pass'))
 SELECT hex(substr(xor(data, 'k3y'), 1, 2)) FROM resources WHERE name = 'enc';
 SELECT decrypt(data, 'aes', substr(k, 1, 32), substr(k, 33, 16)) FROM resources,
        (SELECT pbkdf2('password', unhex('0102030405060708'), 1000, 48) AS k) WHERE name = 'enc';
-SELECT open_bytes(substr(px, 5, int_at(px, 0, 4)), 'stage2.dll')
-  FROM (SELECT image_pixels(data, 'rgb') AS px FROM resource_images WHERE element = 'logo');
 ```
 
 A payload decoded by hand is not in any module's file as it is: give its parent, `open_bytes(blob, 'name', 0, <module>)`,

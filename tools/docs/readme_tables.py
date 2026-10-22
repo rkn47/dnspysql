@@ -45,7 +45,7 @@ SHORT = {
     "method_bodies": "Method bodies as they are in the file: tiny/fat/invalid header (or C++/CLI native code), exception sections, IL that does not decode, shared or overlapping bodies",
     "heap_entries": "Entries of the `#Strings`, `#US`, `#Blob` and `#GUID` heaps, whether anything references them, and slack",
     "file_map": "Every byte range of the file and what it is (dnSpy's hex view), with the gaps no structure accounts for; `WHERE contains = <offset>`",
-    "resource_images": "Images in resources, including serialized Bitmap/Icon/ImageListStreamer (read without deserializing); pixels via `image_pixels()`",
+    "resource_images": "Images in resources, including serialized Bitmap/Icon/ImageListStreamer (read without deserializing), with the image file in `data`",
     "api_docs": "XML documentation of a referenced type or member (dnSpy's tooltips)",
     "protections": "Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques (anti-tamper, IL virtualization, a code-less stub, ...), with evidence",
     "string_decryptors": "Methods shaped like a string decryptor, ranked by call sites with literal arguments",

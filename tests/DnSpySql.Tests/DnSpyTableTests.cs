@@ -222,47 +222,6 @@ public sealed class DnSpyTableTests : SampleTest
         return ms.ToArray();
     }
 
-    // A w x h RGB PNG (pixel x, y = x*30, y*40, x+y), plain or Adam7-interlaced: seven reduced images, scanlines unfiltered
-    static byte[] RgbPng(int w, int h, bool interlaced)
-    {
-        static void Chunk(Stream s, string type, byte[] data)
-        {
-            var len = BitConverter.GetBytes(data.Length); Array.Reverse(len); s.Write(len);
-            var td = System.Text.Encoding.ASCII.GetBytes(type).Concat(data).ToArray();
-            s.Write(td);
-            var crc = BitConverter.GetBytes(Crc32(td)); Array.Reverse(crc); s.Write(crc);
-        }
-        (int X0, int Y0, int Dx, int Dy)[] passes = interlaced
-            ? [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] : [(0, 0, 1, 1)];
-        var raw = new List<byte>();
-        foreach (var (x0, y0, dx, dy) in passes)
-            for (int y = y0; y < h; y += dy)
-            {
-                if (x0 >= w) break;
-                raw.Add(0);
-                for (int x = x0; x < w; x += dx) raw.AddRange([(byte)(x * 30), (byte)(y * 40), (byte)(x + y)]);
-            }
-        using var ms = new MemoryStream();
-        ms.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        Chunk(ms, "IHDR", [0, 0, 0, (byte)w, 0, 0, 0, (byte)h, 8, 2, 0, 0, (byte)(interlaced ? 1 : 0)]);
-        using var z = new MemoryStream();
-        using (var zs = new ZLibStream(z, CompressionLevel.Optimal, true)) zs.Write(raw.ToArray());
-        Chunk(ms, "IDAT", z.ToArray());
-        Chunk(ms, "IEND", []);
-        return ms.ToArray();
-    }
-
-    [Fact]
-    public void Interlaced_pngs_give_the_same_pixels()
-    {
-        var expected = string.Concat(Enumerable.Range(0, 5).SelectMany(y => Enumerable.Range(0, 7).Select(x => $"{(byte)(x * 30):X2}{(byte)(y * 40):X2}{(byte)(x + y):X2}")));
-        var r = Run($"select hex(image_pixels({Hex(RgbPng(7, 5, false))}, 'rgb'))", $"select hex(image_pixels({Hex(RgbPng(7, 5, true))}, 'rgb'))",
-                    $"select length(image_pixels({Hex(RgbPng(1, 1, true))}, 'rgb'))");
-        Assert.Equal(expected, r.Text(0));
-        Assert.Equal(expected, r.Text(1));
-        Assert.Equal(3, r.Long(2)); // only the first pass has a pixel
-    }
-
     static uint Crc32(byte[] d)
     {
         uint c = 0xFFFFFFFF;
@@ -291,12 +250,12 @@ public sealed class DnSpyTableTests : SampleTest
     }
 
     [Fact]
-    public void Resource_images_and_pixels()
+    public void Resource_images_hand_out_the_image_bytes()
     {
         var r = Run($"select add_resource('pic.bmp', {Hex(Bmp())}), add_resource('Img.resources', {Hex(SerializedBitmap(Png()))})",
             "select resource, element, source, format, width, height from resource_images order by resource",
-            "select hex(image_pixels(data, 'rgb')), hex(image_pixels(data, 'rgb', 'columns')), hex(image_pixels(data, 'bgr')) from resource_images where format = 'bmp'",
-            "select hex(image_pixels(data)), type_name from resource_images where source = 'serialized'");
+            "select hex(data) from resource_images where format = 'bmp'",
+            "select hex(data), type_name from resource_images where source = 'serialized'");
         var rows = r.Rows(1);
         Assert.Equal(2, rows.Count);
         var ser = rows.Single(x => x.GetProperty("source").GetString() == "serialized");
@@ -304,15 +263,10 @@ public sealed class DnSpyTableTests : SampleTest
         var bmp = rows.Single(x => x.GetProperty("source").GetString() == "resource");
         Assert.Equal(("bmp", 2L, 2L), (bmp.GetProperty("format").GetString(), bmp.GetProperty("width").GetInt64(), bmp.GetProperty("height").GetInt64()));
 
-        var px = r.Values(2);
-        Assert.Equal("FF000000FF000000FFFFFFFF", px[0].GetString()); // rows, top-down: red green / blue white
-        Assert.Equal("FF00000000FF00FF00FFFFFF", px[1].GetString()); // columns: red blue / green white
-        Assert.Equal("0000FF00FF00FF0000FFFFFF", px[2].GetString());
-        Assert.Equal("FF0000FF00FF00FF0000FFFF", r.Values(3)[0].GetString());
+        // the image files as they are: decoding them is left to the caller
+        Assert.Equal(Convert.ToHexString(Bmp()), r.Text(2));
+        Assert.Equal(Convert.ToHexString(Png()), r.Values(3)[0].GetString());
         Assert.StartsWith("System.Drawing.Bitmap", r.Values(3)[1].GetString());
-
-        var err = Cli.Run(Sample, "select image_pixels(x'000102')");
-        Assert.Contains("not a PNG, BMP or ICO image", err.Error);
     }
 
     [Fact]
@@ -325,24 +279,7 @@ public sealed class DnSpyTableTests : SampleTest
         using var live = new Live(Sample, "--no-project");
         live.Q($"select add_resource('tall.bmp', {Hex(tall)}), add_resource('Odd.resources', {Hex(SerializedBitmap(Png(), bogus))})");
         Assert.Equal(2L, live.Long("select count(*) from resource_images"));
-
-        var palette = Bmp();
-        BitConverter.GetBytes((short)8).CopyTo(palette, 28); // 8-bit, but no palette follows
-        var chunk = Png();
-        new byte[] { 0x7F, 0xFF, 0xFF, 0xF0 }.CopyTo(chunk, 33); // IDAT length
-        var depth = Png();
-        depth[24] = 3;
-        var wide = Png();
-        new byte[] { 1, 0, 0, 0 }.CopyTo(wide, 16); // 16M pixels wide in a few bytes of IDAT
-        static byte[] Ico(int size, int offset) =>
-            [0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 32, 0, .. BitConverter.GetBytes(size), .. BitConverter.GetBytes(offset), 0, 0, 0, 0, 0, 0, 0, 0];
-        foreach (var (image, message) in new[]
-                 {
-                     (tall, "unsupported size"), (palette, "truncated BMP palette"), (chunk, "truncated PNG chunk IDAT"),
-                     (depth, "PNG bit depth 3"), (wide, "truncated PNG data"), (Ico(int.MaxValue, int.MaxValue), "bad icon directory entry"),
-                     (Ico(2, 22), "truncated BMP header"),
-                 })
-            Assert.Contains(message, live.Error($"select image_pixels({Hex(image)})"));
+        Assert.Equal(int.MaxValue, live.Long("select height from resource_images where resource = 'tall.bmp'"));
     }
 
     [Fact]

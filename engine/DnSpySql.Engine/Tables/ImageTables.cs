@@ -1,6 +1,4 @@
 // DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
-using System.IO.Compression;
-using DnSpySql.Functions;
 using DnSpySql.Sql;
 using dnlib.DotNet;
 using dnlib.DotNet.Resources;
@@ -12,8 +10,8 @@ namespace DnSpySql.Tables;
 /// SerializedImageResourceElementNode, SerializedImageListStreamerResourceElementNode): image manifest resources,
 /// images in .resources files, and serialized System.Drawing.Bitmap/Icon and WinForms ImageListStreamer objects.
 /// Serialized objects are never deserialized (BinaryFormatter can run code): the image bytes are located in the NRBF
-/// stream and checked against image signatures. image_pixels() decodes PNG/BMP/ICO pixels in managed code, for payloads
-/// hidden in pixel data.
+/// stream and checked against image signatures. The image bytes are handed out as they are (data); decoding them is left
+/// to the caller.
 /// </summary>
 public static class ImageTables
 {
@@ -26,7 +24,7 @@ public static class ImageTables
         var ws = s.Ws;
         s.Db.Register(new Table<ImageRow>("resource_images",
                 "Images in resources (dnSpy's image previews): image manifest resources, images in .resources files, and serialized " +
-                "Bitmap/Icon/ImageListStreamer objects (read without deserializing). data is the image file; decode pixels with image_pixels()") { Domain = "resources" }
+                "Bitmap/Icon/ImageListStreamer objects (read without deserializing). data is the image file, as the resource holds it") { Domain = "resources" }
             .Source(c => ws.Modules(c).SelectMany(Images))
             .Int("module", r => r.M.Id, pushdown: Pushdown.Eq)
             .Text("resource", r => r.R.Name.String)
@@ -40,32 +38,8 @@ public static class ImageTables
             .Int("frames", r => r.Info.Frames, doc: "icon entries / ImageList images")
             .Int("bits_per_pixel", r => r.Info.BitsPerPixel)
             .Int("size", r => r.Data.Length)
-            .Blob("data", r => r.Data)
+            .Blob("data", r => r.Data, doc: "the image file, as the resource holds it")
             .Estimate(50, 5));
-
-        s.Fn("image_pixels", 1, 3, a =>
-            {
-                var data = Values.ToBytes(a[0]) ?? throw new SqlException("data is NULL");
-                var channels = (Values.ToText(a.Arg(1)) ?? "rgba").ToLowerInvariant();
-                if (channels.Length == 0 || channels.Any(ch => ch is not ('r' or 'g' or 'b' or 'a')))
-                    throw new SqlException("channels is a combination of r, g, b, a (e.g. 'rgb', 'bgra')");
-                var order = (Values.ToText(a.Arg(2)) ?? "rows").ToLowerInvariant();
-                if (order is not ("rows" or "columns")) throw new SqlException("order is 'rows' (y outer) or 'columns' (x outer)");
-                var (w, h, rgba) = Decode(data);
-                var map = channels.Select(ch => ch switch { 'r' => 0, 'g' => 1, 'b' => 2, _ => 3 }).ToArray();
-                var outp = new byte[(long)w * h * map.Length];
-                bool rows = order == "rows";
-                int o = 0;
-                for (int i = 0; i < w * h; i++)
-                {
-                    int x = rows ? i % w : i / h, y = rows ? i / w : i % h;
-                    int p = (y * w + x) * 4;
-                    foreach (var k in map) outp[o++] = rgba[p + k];
-                }
-                return outp;
-            }, "image_pixels(data [, channels [, order]])",
-            "decode a PNG, BMP or ICO image to raw pixel bytes, top-down: channels picks and orders r/g/b/a (default 'rgba', e.g. 'bgr' " +
-            "for GetPixel-style BGR loops), order is 'rows' (y outer, default) or 'columns' (x outer). For payloads hidden in pixels", "data");
     }
 
     // ---- finding images ------------------------------------------------------------------------------------------------
@@ -175,222 +149,5 @@ public static class ImageTables
         }
         if (d.Length < 14 || d[0] != 'I' || d[1] != 'L') return null;
         return (d, new ImageInfo("imagelist", BitConverter.ToInt16(d, 10), BitConverter.ToInt16(d, 12), BitConverter.ToInt16(d, 4), null));
-    }
-
-    // ---- pixel decoding (RGBA8, top-down) --------------------------------------------------------------------------------
-    // Every size and offset taken from the image is checked before it is used. What can still slip through on a hostile
-    // image (a structure that ends early, a corrupt zlib stream) is reported as a malformed image, not an internal error.
-
-    const long MaxPixels = 64L * 1024 * 1024;
-
-    public static (int w, int h, byte[] rgba) Decode(byte[] b)
-    {
-        var info = Info(b) ?? throw new SqlException("not a PNG, BMP or ICO image");
-        try
-        {
-            return info.Format switch
-            {
-                "png" => Png(b),
-                "bmp" => Dib(b, 14, BitConverter.ToUInt32(b, 10), false),
-                "ico" or "cur" => Icon(b),
-                _ => throw new SqlException($"decoding {info.Format} is not supported; the image bytes are in data"),
-            };
-        }
-        catch (Exception e) when (e is IndexOutOfRangeException or ArgumentException or InvalidDataException)
-        {
-            throw new SqlException($"malformed {info.Format} image ({e.Message})");
-        }
-    }
-
-    static void Check(long w, long h)
-    {
-        if (w <= 0 || h <= 0 || w * h > MaxPixels) throw new SqlException($"unsupported size {w}x{h}");
-    }
-
-    static (int, int, byte[]) Png(byte[] b)
-    {
-        int w = 0, h = 0, depth = 0, color = 0, interlace = 0;
-        bool header = false;
-        byte[]? palette = null, trns = null;
-        using var idat = new MemoryStream();
-        for (int i = 8; i + 8 <= b.Length;)
-        {
-            int len = b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3];
-            var type = System.Text.Encoding.ASCII.GetString(b, i + 4, 4);
-            if (len < 0 || len > b.Length - i - 12) throw new SqlException("truncated PNG chunk " + type);
-            var data = b.AsSpan(i + 8, len);
-            switch (type)
-            {
-                case "IHDR" when len >= 13:
-                    w = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
-                    h = data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7];
-                    depth = data[8]; color = data[9]; interlace = data[12];
-                    header = true;
-                    break;
-                case "PLTE": palette = data.ToArray(); break;
-                case "tRNS": trns = data.ToArray(); break;
-                case "IDAT": idat.Write(data); break;
-            }
-            if (type == "IEND") break;
-            i += 12 + len;
-        }
-        if (!header) throw new SqlException("PNG without an IHDR chunk");
-        Check(w, h);
-        if (interlace is not (0 or 1)) throw new SqlException($"PNG interlace method {interlace}");
-        int ch = color switch { 0 => 1, 2 => 3, 3 => 1, 4 => 2, 6 => 4, _ => throw new SqlException($"PNG color type {color}") };
-        if (!(color switch { 0 => depth is 1 or 2 or 4 or 8 or 16, 3 => depth is 1 or 2 or 4 or 8, _ => depth is 8 or 16 }))
-            throw new SqlException($"PNG bit depth {depth} for color type {color}");
-        int bpp = Math.Max(1, ch * depth / 8);
-        // Adam7 stores the image as seven reduced images (start x, start y, step x, step y), each with its own scanlines;
-        // a plain PNG is one pass over every pixel. A pass with no pixel has no scanline.
-        (int X0, int Y0, int Dx, int Dy)[] passes = interlace == 0 ? [(0, 0, 1, 1)]
-            : [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
-        // At most 64M pixels of at most 8 bytes, plus a filter byte per row: fits an int.
-        long Stride(long pw) => (pw * ch * depth + 7) / 8;
-        long PassW((int X0, int Y0, int Dx, int Dy) p) => Math.Max(0, (w - p.X0 + p.Dx - 1) / p.Dx);
-        long PassH((int X0, int Y0, int Dx, int Dy) p) => Math.Max(0, (h - p.Y0 + p.Dy - 1) / p.Dy);
-        long needed = passes.Sum(p => PassW(p) == 0 ? 0 : (Stride(PassW(p)) + 1) * PassH(p));
-        // Deflate expands at most about 1032:1, so a few compressed bytes cannot hold a large image: refuse before
-        // allocating for it.
-        if (needed > idat.Length * 1032 + 1024) throw new SqlException("truncated PNG data");
-        idat.Position = 0;
-        using var z = new ZLibStream(idat, CompressionMode.Decompress);
-        var raw = new byte[needed];
-        int got = 0;
-        while (got < raw.Length && z.Read(raw, got, raw.Length - got) is var n && n > 0) got += n;
-        if (got < raw.Length) throw new SqlException("truncated PNG data");
-
-        var rgba = new byte[(long)w * h * 4];
-        int at = 0;
-        foreach (var pass in passes)
-        {
-            int pw = (int)PassW(pass), ph = (int)PassH(pass);
-            if (pw == 0 || ph == 0) continue;
-            int stride = (int)Stride(pw);
-            var cur = new byte[stride];
-            var prev = new byte[stride];
-            for (int py = 0; py < ph; py++, at += stride + 1)
-            {
-                int f = raw[at];
-                Array.Copy(raw, at + 1, cur, 0, stride);
-                for (int x = 0; x < stride; x++)
-                {
-                    int a = x >= bpp ? cur[x - bpp] : 0, up = prev[x], c = x >= bpp ? prev[x - bpp] : 0;
-                    cur[x] = (byte)(cur[x] + f switch
-                    {
-                        0 => 0, 1 => a, 2 => up, 3 => (a + up) / 2,
-                        4 => Paeth(a, up, c),
-                        _ => throw new SqlException($"bad PNG filter {f}"),
-                    });
-                }
-                Put(cur, py * pass.Dy + pass.Y0, pw, pass);
-                (prev, cur) = (cur, prev);
-            }
-        }
-        return (w, h, rgba);
-
-        // one decoded scanline of a pass, into the image
-        void Put(byte[] cur, int y, int pw, (int X0, int Y0, int Dx, int Dy) pass)
-        {
-            for (int px = 0; px < pw; px++)
-            {
-                int x = px;
-                int Sample(int k)
-                {
-                    if (depth == 8) return cur[x * ch + k];
-                    if (depth == 16) return cur[(x * ch + k) * 2];
-                    int bitPos = (x * ch + k) * depth, v = cur[bitPos / 8] >> (8 - depth - bitPos % 8) & ((1 << depth) - 1);
-                    return color == 3 ? v : v * 255 / ((1 << depth) - 1);
-                }
-                int o = (y * w + px * pass.Dx + pass.X0) * 4;
-                switch (color)
-                {
-                    case 0: rgba[o] = rgba[o + 1] = rgba[o + 2] = (byte)Sample(0); rgba[o + 3] = 255; break;
-                    case 2: rgba[o] = (byte)Sample(0); rgba[o + 1] = (byte)Sample(1); rgba[o + 2] = (byte)Sample(2); rgba[o + 3] = 255; break;
-                    case 3:
-                        int idx = Sample(0);
-                        if (palette == null || idx * 3 + 2 >= palette.Length) throw new SqlException("PNG palette index out of range");
-                        rgba[o] = palette[idx * 3]; rgba[o + 1] = palette[idx * 3 + 1]; rgba[o + 2] = palette[idx * 3 + 2];
-                        rgba[o + 3] = trns != null && idx < trns.Length ? trns[idx] : (byte)255;
-                        break;
-                    case 4: rgba[o] = rgba[o + 1] = rgba[o + 2] = (byte)Sample(0); rgba[o + 3] = (byte)Sample(1); break;
-                    default: rgba[o] = (byte)Sample(0); rgba[o + 1] = (byte)Sample(1); rgba[o + 2] = (byte)Sample(2); rgba[o + 3] = (byte)Sample(3); break;
-                }
-            }
-        }
-    }
-
-    static int Paeth(int a, int b, int c)
-    {
-        int p = a + b - c, pa = Math.Abs(p - a), pb = Math.Abs(p - b), pc = Math.Abs(p - c);
-        return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-    }
-
-    // A DIB (BITMAPINFOHEADER or BITMAPCOREHEADER) at `at`; `pixels` is the file offset of the pixel array (0 = right after
-    // the palette). Icons store the height doubled (XOR + AND masks); only the XOR (color) image is decoded.
-    static (int, int, byte[]) Dib(byte[] b, int at, uint pixels, bool icon)
-    {
-        if ((long)at + 12 > b.Length) throw new SqlException("truncated BMP header");
-        uint hdr = BitConverter.ToUInt32(b, at);
-        bool core = hdr == 12;
-        if (!core && hdr < 40) throw new SqlException($"BMP header size {hdr}");
-        if (!core && hdr > b.Length - at) throw new SqlException("truncated BMP header");
-        int w = core ? BitConverter.ToUInt16(b, at + 4) : BitConverter.ToInt32(b, at + 4);
-        long hRaw = core ? BitConverter.ToUInt16(b, at + 6) : BitConverter.ToInt32(b, at + 8);
-        int bpp = BitConverter.ToUInt16(b, at + (core ? 10 : 14));
-        uint compression = core ? 0 : BitConverter.ToUInt32(b, at + 16);
-        bool topDown = hRaw < 0;
-        long hl = Math.Abs(hRaw) / (icon ? 2 : 1);
-        Check(w, hl);
-        int h = (int)hl;
-        if (compression is not (0 or 3)) throw new SqlException("compressed BMP (RLE/JPEG/PNG in BMP) is not supported");
-        if (bpp is not (1 or 4 or 8 or 24 or 32)) throw new SqlException($"{bpp}-bit BMP is not supported");
-        uint used = core ? 0 : BitConverter.ToUInt32(b, at + 32);
-        int colors = bpp > 8 ? 0 : used > 0 && used < 1u << bpp ? (int)used : 1 << bpp;
-        long palAt = at + (long)hdr + (compression == 3 && hdr == 40 ? 12 : 0);
-        int entry = core ? 3 : 4;
-        long palEnd = palAt + (long)colors * entry;
-        long data = pixels != 0 ? pixels : palEnd;
-        long stride = ((long)w * bpp + 31) / 32 * 4;
-        if (palEnd > b.Length) throw new SqlException("truncated BMP palette");
-        if (data + stride * h > b.Length) throw new SqlException("truncated BMP pixel data");
-        var rgba = new byte[(long)w * h * 4];
-        for (int y = 0; y < h; y++)
-        {
-            int row = (int)(data + (topDown ? y : h - 1 - y) * stride);
-            for (int x = 0; x < w; x++)
-            {
-                int o = (y * w + x) * 4;
-                switch (bpp)
-                {
-                    case 32: rgba[o] = b[row + x * 4 + 2]; rgba[o + 1] = b[row + x * 4 + 1]; rgba[o + 2] = b[row + x * 4]; rgba[o + 3] = b[row + x * 4 + 3]; break;
-                    case 24: rgba[o] = b[row + x * 3 + 2]; rgba[o + 1] = b[row + x * 3 + 1]; rgba[o + 2] = b[row + x * 3]; rgba[o + 3] = 255; break;
-                    default:
-                        int bit = x * bpp, idx = b[row + bit / 8] >> (8 - bpp - bit % 8) & ((1 << bpp) - 1);
-                        // an index past the palette reads as black
-                        if (idx < colors) { int p = (int)palAt + idx * entry; rgba[o] = b[p + 2]; rgba[o + 1] = b[p + 1]; rgba[o + 2] = b[p]; }
-                        rgba[o + 3] = 255;
-                        break;
-                }
-            }
-        }
-        if (bpp == 32 && compression == 0 && !icon)
-        {
-            // BI_RGB 32-bit: the fourth byte is unused, so an image whose alpha is 0 everywhere is opaque
-            bool alpha = false;
-            for (int i = 3; i < rgba.Length && !alpha; i += 4) alpha = rgba[i] != 0;
-            if (!alpha) for (int i = 3; i < rgba.Length; i += 4) rgba[i] = 255;
-        }
-        return (w, h, rgba);
-    }
-
-    // The first image of an icon: PNG-compressed or a DIB.
-    static (int, int, byte[]) Icon(byte[] b)
-    {
-        int size = BitConverter.ToInt32(b, 14), off = BitConverter.ToInt32(b, 18);
-        if (off < 0 || size <= 0 || size > b.Length - off) throw new SqlException("bad icon directory entry");
-        var img = b.AsSpan(off, size).ToArray();
-        if (img.Length >= 8 && img[0] == 0x89 && img[1] == 0x50) return Png(img);
-        return Dib(img, 0, 0, true);
     }
 }

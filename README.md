@@ -375,7 +375,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 | table | writes | description |
 |---|---|---|
 | `resource_elements` | UPDATE, INSERT, DELETE | Entries of `.resources` files: strings, primitives, byte arrays, serialized objects |
-| `resource_images` |  | Images in resources, including serialized Bitmap/Icon/ImageListStreamer (read without deserializing); pixels via `image_pixels()` |
+| `resource_images` |  | Images in resources, including serialized Bitmap/Icon/ImageListStreamer (read without deserializing), with the image file in `data` |
 | `resources` | UPDATE, INSERT, DELETE | Manifest resources and their embedded bytes |
 
 </details>
@@ -493,7 +493,7 @@ By area; signatures are in [docs/SCHEMA.md](docs/SCHEMA.md).
 | annotations | `set_comment`, `tag` |
 | triage | `triage` (the first look at a module as one JSON object: protections, payloads, decrypted strings, capabilities, indicators, config candidates, next queries) |
 | breakpoints | `bp_set`, `bp_trace`, `bp_set_line`, `bp_set_decompiled`, `bp_toggle`, `bp_enable`, `bp_clear`, `bp_module`, `break_on_exception`, `bp_patch`, `bp_export` (= `export_dnspy_breakpoints`), `bp_import` (= `import_dnspy_breakpoints`), `dnspy_sync` |
-| data | `regexp`, `regexp_extract`, `regexp_replace`, `base64_decode`, `base64_encode`, `text_decode`, `text_encode`, `xor`, `concat_bytes`, `int_at` (little/big-endian integers in a blob), `emulate` (a static method on literal arguments, interpreted), `decompress` (gzip, zlib, deflate, brotli, LZMA; detects gzip and zlib, also after a 4-byte length), `decrypt` (AES/DES/3DES/RC2/RC4), `try_decrypt` (NULL instead of an error, for trial decryption over many values), `aes_decrypt`, `pbkdf2`, `md5`, `sha1`, `sha256`, `entropy`, `image_pixels` (PNG/BMP/ICO pixels, for payloads hidden in images) |
+| data | `regexp`, `regexp_extract`, `regexp_replace`, `base64_decode`, `base64_encode`, `text_decode`, `text_encode`, `xor`, `concat_bytes`, `int_at` (little/big-endian integers in a blob), `emulate` (a static method on literal arguments, interpreted), `decompress` (gzip, zlib, deflate, brotli, LZMA; detects gzip and zlib, also after a 4-byte length), `decrypt` (AES/DES/3DES/RC2/RC4), `try_decrypt` (NULL instead of an error, for trial decryption over many values), `aes_decrypt`, `pbkdf2`, `md5`, `sha1`, `sha256`, `entropy` |
 
 ## Handing results to dnSpy
 
@@ -718,12 +718,12 @@ where the decompiler only sees garbage:
 | `method_bodies` | each body's header (tiny, fat or invalid), exception sections, whether the IL decodes, and bodies that share or overlap another; anti-tamper protectors leave hundreds of invalid bodies |
 | `file_map` | what every byte range is, and the gaps no structure accounts for, with their entropy |
 | `heap_entries` | metadata heap entries nothing references, and slack after the last one |
-| `resource_images`, `image_pixels()` | images in resources (serialized bitmaps included, read without deserializing) and their raw pixels, where loaders hide the next stage |
+| `resource_images` | images in resources (serialized bitmaps included, read without deserializing), with the image file in `data` for a payload hidden in its pixels |
 
 ```sql
 SELECT format, il_status, count(*) FROM method_bodies GROUP BY 1, 2;
 SELECT path, size, entropy FROM file_map WHERE kind = 'gap' AND NOT all_zero ORDER BY size DESC;
-SELECT element, width, height, hex(substr(image_pixels(data, 'rgb'), 1, 4)) FROM resource_images;
+SELECT element, format, width, height, length(data) FROM resource_images;
 ```
 
 #### Decompiler robustness

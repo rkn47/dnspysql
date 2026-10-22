@@ -85,7 +85,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 |---|---|---|
 | Manifest resources (embedded / linked / assembly-linked), raw data | `resources` (`data`, `sniffed_type`, `text`, `sha256`) | ✅ |
 | `.resources` elements (strings, primitives, byte[], streams, serialized) | `resource_elements` | ✅ |
-| Image / icon / ImageListStreamer preview | `resource_images` (image resources, images in `.resources`, serialized Bitmap/Icon/ImageListStreamer read without deserializing), `image_pixels()` (PNG/BMP/ICO pixels) | ✅ |
+| Image / icon / ImageListStreamer preview | `resource_images` (image resources, images in `.resources`, serialized Bitmap/Icon/ImageListStreamer read without deserializing; `data` is the image file) | ✅ |
 | BAML → XAML | `baml` table (`xaml` column, dnSpy's BAML decompiler) | ✅ |
 | Embedded executables (not in dnSpy) | `embedded_pes` (PE files in the file bytes, resources and `.resources` entries, also behind gzip/zlib/deflate or split across numbered resources), `open_bytes(data)` for a .NET one (one module per payload; `modules.origin`, `derived_from`); a PE inside another carve names it (`parent_offset`); `resources.content_type` | ✅ |
 
@@ -320,7 +320,8 @@ configured here and executed by dnSpy.
    remapping hits in compiler-generated code to the user method (beyond the async/iterator `MoveNext` link).
 7. **Decompiler**: the ILAst debug language (Debug builds of dnSpy only), the VB project export,
    brace ranges, option toggles beyond language/tokens.
-8. **Resources**: creating or replacing image elements, linked resources; decoding GIF/JPEG pixels.
+8. **Resources**: creating or replacing image elements, linked resources. Decoding image pixels is left to the caller:
+   `resource_images.data` hands out the image file.
 9. **Writer options**: the full dnSpy save dialog (PE header overrides, metadata/heap options, RID preservation per table).
    Saving keeps all tokens (`PreserveAll`) or none.
 10. **.NET Framework targets on Linux**: `build.sh` bundles the .NET Framework 4.8 reference assemblies
