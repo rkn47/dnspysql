@@ -55,7 +55,7 @@ public static class HexTables
 
     /// <summary>Method tokens whose body does not decode as IL in the file, with the il_status (asked on every decompile).</summary>
     public static IReadOnlyDictionary<uint, string> Undecodable(LoadedModule m) =>
-        _undecodable.GetValue(m, lm => Bodies(lm).Where(b => b.IlStatus != "ok").ToDictionary(b => 0x06000000u | b.Rid, b => b.IlStatus));
+        _undecodable.GetValue(m, lm => Bodies(lm).Where(b => b.IlStatus is not ("ok" or "native")).ToDictionary(b => 0x06000000u | b.Rid, b => b.IlStatus));
     // Likewise the file map and the heaps' column references: both read OriginalBytes and FileMetadata, which stay the
     // file's (raw patches and model edits do not change them).
     static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LoadedModule, List<Region>> _maps = new();
@@ -68,7 +68,7 @@ public static class HexTables
         var db = s.Db;
 
         db.Register(new Table<Body>("method_bodies",
-                "Method bodies as they are in the file (dnSpy hex view): tiny/fat/invalid header, exception sections, whether the IL decodes, " +
+                "Method bodies as they are in the file (dnSpy hex view): tiny/fat/invalid header (or native code), exception sections, whether the IL decodes, " +
                 "and bodies that share or overlap another. Anti-tamper and packers show up here") { Domain = "pe" }
             .Source(c =>
             {
@@ -82,7 +82,7 @@ public static class HexTables
             .Int("rva", b => b.Rva)
             .Int("file_offset", b => b.FileOffset)
             .Text("section", b => b.Section, doc: "PE section holding the body (NULL = outside every section)")
-            .Text("format", b => b.Format, doc: "tiny | fat | invalid")
+            .Text("format", b => b.Format, doc: "tiny | fat | native (machine code: a C++/CLI method's RVA points at no IL header) | invalid")
             .Int("header_size", b => b.HeaderSize)
             .Int("flags", b => b.Flags, doc: "fat header flags (0x08 MoreSects, 0x10 InitLocals)")
             .Int("max_stack", b => b.MaxStack)
@@ -94,7 +94,7 @@ public static class HexTables
             .Int("eh_clauses", b => b.EhClauses)
             .Int("padding", b => b.Padding, doc: "alignment bytes between the code and the exception section")
             .Int("size", b => b.End - b.FileOffset, doc: "header + code + padding + exception sections")
-            .Text("il_status", b => b.IlStatus, doc: "ok | bad_opcode | bad_token | bad_branch | truncated | no_body (header invalid)")
+            .Text("il_status", b => b.IlStatus, doc: "ok | bad_opcode | bad_token | bad_branch | truncated | no_body (header invalid) | native (not IL, so not checked)")
             .Int("il_error_offset", b => b.IlErrorOffset, doc: "IL offset of the first problem")
             .Int("shared_with", b => b.SharedWith == 0 ? null : b.M.H(0x06000000 | b.SharedWith), doc: "another method with the same RVA")
             .Int("overlaps", b => b.Overlaps == 0 ? null : b.M.H(0x06000000 | b.Overlaps), doc: "another method whose body overlaps this one")
@@ -161,7 +161,10 @@ public static class HexTables
             var b = new Body { M = m, Rid = rid, Rva = row.RVA };
             try { b.FileOffset = (long)pe.ToFileOffset((RVA)row.RVA); } catch (Exception) { b.FileOffset = -1; }
             b.Section = SectionOf(pe, row.RVA);
-            if (b.Section == null || !PeTables.InFile(pe, row.RVA) || b.FileOffset < 0 || b.FileOffset >= m.OriginalBytes.Length)
+            // code type Native (or the reserved OPTIL): the RVA points at machine code, which parsed as IL would look like
+            // an encrypted body, and every C++/CLI image would read as anti-tampered; its size is not in the metadata
+            if ((row.ImplFlags & 3) is 1 or 2) { b.Format = "native"; b.IlStatus = "native"; b.End = Math.Max(b.FileOffset, 0); }
+            else if (b.Section == null || !PeTables.InFile(pe, row.RVA) || b.FileOffset < 0 || b.FileOffset >= m.OriginalBytes.Length)
             {
                 b.Error = b.Section == null ? "RVA outside every section" : $"RVA in {b.Section} past its bytes in the file (zero-filled when loaded)";
                 b.IlStatus = "no_body"; b.End = Math.Max(b.FileOffset, 0);
@@ -171,10 +174,10 @@ public static class HexTables
         }
         // Bodies that share an RVA or overlap another one. A body is compared with the one reaching furthest so far, not
         // just its neighbour: a long body can hold several short ones.
-        foreach (var g in list.Where(b => b.Format != "invalid").GroupBy(b => b.Rva).Select(g => g.ToList()).Where(g => g.Count > 1))
+        foreach (var g in list.Where(b => b.Format is not ("invalid" or "native")).GroupBy(b => b.Rva).Select(g => g.ToList()).Where(g => g.Count > 1))
             foreach (var b in g) b.SharedWith = (b == g[0] ? g[1] : g[0]).Rid; // linear: protectors point thousands at one body
         Body? reach = null;
-        foreach (var b in list.Where(b => b.Format != "invalid" && b.End > b.FileOffset).OrderBy(b => b.FileOffset))
+        foreach (var b in list.Where(b => b.Format is not ("invalid" or "native") && b.End > b.FileOffset).OrderBy(b => b.FileOffset))
         {
             if (reach != null && b.FileOffset < reach.End && b.Rva != reach.Rva)
             {

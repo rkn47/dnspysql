@@ -182,9 +182,10 @@ public static class ProtectionTables
             found.Add(new Finding(m, "name obfuscation", "name obfuscation", "medium", $"{gibberish} of {names.Count} names look random (no word structure)"));
 
         // anti-tamper: bodies decrypted at startup
-        var bodies = HexTables.Bodies(m);
+        // (a C++/CLI method's native code is not an IL body)
+        var bodies = HexTables.Bodies(m).Where(b => b.Format != "native").ToList();
         // bodies that are in the file and do not decode (one past the end of a truncated file is damage, not protection)
-        var bad = bodies.Where(b => (b.Format == "invalid" || b.IlStatus != "ok") && b.FileOffset >= 0 && b.FileOffset < m.OriginalBytes.Length).ToList();
+        var bad = bodies.Where(b => b.IlStatus != "ok" && b.FileOffset >= 0 && b.FileOffset < m.OriginalBytes.Length).ToList();
         int invalid = bad.Count;
         bool virtualProtect = md.GlobalType?.Methods.Any(x => x.ImplMap?.Name.String is "VirtualProtect") == true;
         if (virtualProtect || invalid >= 5)

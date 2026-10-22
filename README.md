@@ -391,7 +391,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 | `md_rows` | UPDATE | Raw metadata table cells (dnSpy's metadata table view); UPDATE patches the file (needs `WHERE table_name = ...`) |
 | `md_streams` |  | Metadata stream headers (#~, #Strings, #US, #GUID, #Blob, #Pdb ...) |
 | `md_tables` |  | Metadata tables present in #~ with row counts, row sizes and file offsets |
-| `method_bodies` |  | Method bodies as they are in the file: tiny/fat/invalid header, exception sections, IL that does not decode, shared or overlapping bodies |
+| `method_bodies` |  | Method bodies as they are in the file: tiny/fat/invalid header (or C++/CLI native code), exception sections, IL that does not decode, shared or overlapping bodies |
 | `pe_data_directories` |  | The 16 optional-header data directories |
 | `pe_fields` | UPDATE | Every field of the DOS, file, optional, COR20 and metadata headers, with its file offset; UPDATE patches the file |
 | `pe_sections` |  | PE section headers |

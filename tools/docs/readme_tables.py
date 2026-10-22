@@ -41,7 +41,7 @@ SHORT = {
     "callees": "What a method calls (`WHERE method = ...`); external callees have `callee = 0`",
     "entry_points": "Managed entry points, module initializers and static constructors of every module",
     "pseudocode_refs": "Names in the decompiled source and what they refer to (dnSpy's click-to-definition): members, locals, parameters, labels",
-    "method_bodies": "Method bodies as they are in the file: tiny/fat/invalid header, exception sections, IL that does not decode, shared or overlapping bodies",
+    "method_bodies": "Method bodies as they are in the file: tiny/fat/invalid header (or C++/CLI native code), exception sections, IL that does not decode, shared or overlapping bodies",
     "heap_entries": "Entries of the `#Strings`, `#US`, `#Blob` and `#GUID` heaps, whether anything references them, and slack",
     "file_map": "Every byte range of the file and what it is (dnSpy's hex view), with the gaps no structure accounts for; `WHERE contains = <offset>`",
     "resource_images": "Images in resources, including serialized Bitmap/Icon/ImageListStreamer (read without deserializing); pixels via `image_pixels()`",

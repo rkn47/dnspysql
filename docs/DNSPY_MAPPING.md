@@ -42,7 +42,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | Locals (with PDB names) | `locals`, `pdb_locals` | ✅ |
 | Exception handlers | `exception_handlers` | ✅ |
 | Method body header (max stack, init locals, code size, RVA, file offset) | `methods` columns, `method_bytes()` | ✅ |
-| Hex view of a method body as it is in the file: tiny/fat/invalid header, exception sections, padding | `method_bodies` (also: IL that does not decode, bodies that share or overlap another) | ✅ |
+| Hex view of a method body as it is in the file: tiny/fat/invalid header, exception sections, padding | `method_bodies` (also: IL that does not decode, C++/CLI native methods, bodies that share or overlap another) | ✅ |
 | Basic blocks / control flow (not in dnSpy) | `blocks`, `cfg_edges` | ✅ |
 | Number / string literal search | `literals`, `search … kind = 'number'/'string'` | ✅ |
 

@@ -1241,7 +1241,7 @@ Native Win32 resources (version info, manifest, icons ...)
 
 ### `method_bodies`
 
-Method bodies as they are in the file (dnSpy hex view): tiny/fat/invalid header, exception sections, whether the IL decodes, and bodies that share or overlap another. Anti-tamper and packers show up here
+Method bodies as they are in the file (dnSpy hex view): tiny/fat/invalid header (or native code), exception sections, whether the IL decodes, and bodies that share or overlap another. Anti-tamper and packers show up here
 
 | column | type | flags | description |
 |---|---|---|---|
@@ -1251,7 +1251,7 @@ Method bodies as they are in the file (dnSpy hex view): tiny/fat/invalid header,
 | rva | INTEGER |  |  |
 | file_offset | INTEGER |  |  |
 | section | TEXT |  | PE section holding the body (NULL = outside every section) |
-| format | TEXT |  | tiny \| fat \| invalid |
+| format | TEXT |  | tiny \| fat \| native (machine code: a C++/CLI method's RVA points at no IL header) \| invalid |
 | header_size | INTEGER |  |  |
 | flags | INTEGER |  | fat header flags (0x08 MoreSects, 0x10 InitLocals) |
 | max_stack | INTEGER |  |  |
@@ -1263,7 +1263,7 @@ Method bodies as they are in the file (dnSpy hex view): tiny/fat/invalid header,
 | eh_clauses | INTEGER |  |  |
 | padding | INTEGER |  | alignment bytes between the code and the exception section |
 | size | INTEGER |  | header + code + padding + exception sections |
-| il_status | TEXT |  | ok \| bad_opcode \| bad_token \| bad_branch \| truncated \| no_body (header invalid) |
+| il_status | TEXT |  | ok \| bad_opcode \| bad_token \| bad_branch \| truncated \| no_body (header invalid) \| native (not IL, so not checked) |
 | il_error_offset | INTEGER |  | IL offset of the first problem |
 | shared_with | INTEGER |  | another method with the same RVA |
 | overlaps | INTEGER |  | another method whose body overlaps this one |
