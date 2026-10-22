@@ -42,6 +42,8 @@ SELECT emulation, count(*) FROM decryptor_calls GROUP BY 1;
 SELECT caller_name, args, plaintext FROM decryptor_calls WHERE decryptor = resolve('a.b::c');   -- any method
 SELECT emulate(resolve('Ns.Crypto::Decrypt'), 'base64ciphertext==');
 SELECT text_decode(decrypt(base64_decode('<ct>'), 'aes', unhex(md5('<passphrase>'))));   -- no iv = ECB
+SELECT field_name, text_decode(try_decrypt(base64_decode(value), 'aes', <key>)) FROM field_inits WHERE type_name = '<settings type>';
+                                                     -- try_decrypt: NULL, not an error, for a value that is not ciphertext
 SELECT idx, value FROM split_text WHERE text = '<decrypted>' AND separator = '|';
 SELECT kind, value FROM text_iocs WHERE text = '<decrypted>';
 ```

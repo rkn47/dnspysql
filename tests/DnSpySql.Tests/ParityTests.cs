@@ -453,6 +453,12 @@ public sealed class ParityTests : IDisposable
         Assert.Equal("BBF316E8D940AF0AD3", Scalar("SELECT hex(decrypt('Plaintext', 'rc4', 'Key'))"));
         Assert.Equal("0cc175b9c0f1b6a831c399e269772661", Scalar("SELECT md5('a')"));
         Assert.NotNull(_s.Error("SELECT decrypt(x'00', 'aes', x'0011')"));
+        // trial decryption: every failure is NULL, so one odd value does not stop the query
+        Assert.Null(Scalar("SELECT try_decrypt(x'00', 'aes', randomblob(32), x'00', 'cbc')"));
+        Assert.Null(Scalar("SELECT try_decrypt(x'00', 'aes', x'0011')"));
+        Assert.Null(Scalar("SELECT try_decrypt(x'00', 'blowfish', x'0011')"));
+        Assert.Equal(Scalar("SELECT hex(decrypt('Plaintext', 'rc4', 'Key'))"), Scalar("SELECT hex(try_decrypt('Plaintext', 'rc4', 'Key'))"));
+        Assert.Equal("6BC1BEE22E409F96E93D7E117393172A", Scalar("SELECT hex(try_decrypt(unhex('3ad77bb40d7a3660a89ecaf32466ef97'), 'aes', unhex('2b7e151628aed2a6abf7158809cf4f3c'), NULL, 'ecb', 'none'))"));
     }
 
     [Fact]

@@ -466,7 +466,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
   `pseudocode WHERE handle = ...`, `search WHERE query = ...`, `md_rows WHERE table_name = ...`. `il`, `locals`,
   `exception_handlers`, `blocks` and `cfg_edges` take a `method` filter but also scan every body.
 - **Undo.** Writes are journaled per statement: `undo(n)`, `redo(n)`, the `transactions` table; `--readonly`
-  refuses them.
+  refuses them. `set_setting('read_only', 1)` locks a running session the same way; it cannot be switched off again.
 - **Compatibility.** The names of earlier DnSpySql versions still work: `refs` and `attributes` are views, and older
   column names (`method_token`, `type_token`, `il_size`, ...) are extra columns. `params.seq` is now the ECMA
   sequence number (0 = return value); the 0-based argument position is `params.arg_index`.
@@ -486,7 +486,7 @@ By area; signatures are in [docs/SCHEMA.md](docs/SCHEMA.md).
 | annotations | `set_comment`, `tag` |
 | triage | `triage` (the first look at a module as one JSON object: protections, payloads, decrypted strings, capabilities, indicators, config candidates, next queries) |
 | breakpoints | `bp_set`, `bp_trace`, `bp_set_line`, `bp_set_decompiled`, `bp_toggle`, `bp_enable`, `bp_clear`, `bp_module`, `break_on_exception`, `bp_patch`, `bp_export` (= `export_dnspy_breakpoints`), `bp_import` (= `import_dnspy_breakpoints`), `dnspy_sync` |
-| data | `regexp`, `regexp_extract`, `regexp_replace`, `base64_decode`, `base64_encode`, `text_decode`, `text_encode`, `xor`, `concat_bytes`, `int_at` (little/big-endian integers in a blob), `emulate` (a static method on literal arguments, interpreted), `decompress` (gzip, zlib, deflate, brotli, LZMA; detects gzip and zlib, also after a 4-byte length), `decrypt` (AES/DES/3DES/RC2/RC4), `aes_decrypt`, `pbkdf2`, `md5`, `sha1`, `sha256`, `entropy`, `image_pixels` (PNG/BMP/ICO pixels, for payloads hidden in images) |
+| data | `regexp`, `regexp_extract`, `regexp_replace`, `base64_decode`, `base64_encode`, `text_decode`, `text_encode`, `xor`, `concat_bytes`, `int_at` (little/big-endian integers in a blob), `emulate` (a static method on literal arguments, interpreted), `decompress` (gzip, zlib, deflate, brotli, LZMA; detects gzip and zlib, also after a 4-byte length), `decrypt` (AES/DES/3DES/RC2/RC4), `try_decrypt` (NULL instead of an error, for trial decryption over many values), `aes_decrypt`, `pbkdf2`, `md5`, `sha1`, `sha256`, `entropy`, `image_pixels` (PNG/BMP/ICO pixels, for payloads hidden in images) |
 
 ## Handing results to dnSpy
 

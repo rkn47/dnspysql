@@ -134,7 +134,8 @@ public sealed class Session : IDisposable
             "dnSpy settings file kept in step after every statement that changes breakpoints, bookmarks, module breakpoints or " +
             "exception settings: auto (dnSpyEx's choice: bin\\dnSpy.xml of a running dnSpy when it exists, else " +
             "%APPDATA%\\dnSpy\\dnSpy.xml; Windows only), off, or a path. SELECT dnspy_sync() syncs now");
-        Add("read_only", "bool", Options.ReadOnly ? "1" : "0", "session refuses writes", settable: false);
+        Add("read_only", "bool", Options.ReadOnly ? "1" : "0",
+            "session refuses writes (--readonly); can be switched on, never off: set it to 1 to lock a session for analysis only");
     }
 
     public void SetSetting(string key, string? value)
@@ -142,6 +143,16 @@ public sealed class Session : IDisposable
         if (!Settings.TryGetValue(key, out var s)) throw new SqlException($"unknown setting '{key}'");
         if (!s.Settable) throw new SqlException($"setting '{key}' is read-only");
         if (s.Type == "int" && Values.ParseLong(value ?? "") is null) throw new SqlException($"setting '{key}' needs an integer");
+        if (key == "read_only")
+        {
+            // one way: a server registered without --readonly can be locked for an analysis-only task, and a session that
+            // was promised read-only (by the user, or by an earlier statement) cannot be unlocked by a later one
+            bool on = value is "1" or "true" or "on" or "yes";
+            if (!on && Db.ReadOnly) throw new SqlException("read_only can only be switched on; restart without --readonly to write");
+            if (!on && value is not ("0" or "false" or "off" or "no")) throw new SqlException("setting 'read_only' needs 1 or 0");
+            Db.ReadOnly |= on;
+            value = Db.ReadOnly ? "1" : "0";
+        }
         if (key == "current_module")
         {
             var id = (int)Values.ParseLong(value!)!.Value;

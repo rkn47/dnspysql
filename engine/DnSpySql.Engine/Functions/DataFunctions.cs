@@ -90,7 +90,21 @@ public static class DataFunctions
         s.Fn("decrypt", 3, 6, a => a[0] == null ? null : Decrypt(Bytes(a[0], "data"), Str(a[1], "algorithm"), Bytes(a[2], "key"),
                 a.Arg(3) == null ? null : Bytes(a[3], "iv"), Values.ToText(a.Arg(4)), Values.ToText(a.Arg(5))),
             "decrypt(data, algorithm, key [, iv [, mode [, padding]]])",
-            "symmetric decryption: algorithm aes|des|3des|rc2|rc4; mode cbc (default with an iv) | ecb (default without) | cfb; padding pkcs7 (default) | none | zeros | ansix923 | iso10126. NULL when the padding does not check out (usually a wrong key, iv or mode); an error when the key or iv has the wrong size",
+            "symmetric decryption: algorithm aes|des|3des|rc2|rc4; mode cbc (default with an iv) | ecb (default without) | cfb; padding pkcs7 (default) | none | zeros | ansix923 | iso10126. NULL when the padding does not check out (usually a wrong key, iv or mode); an error when the key or iv has the wrong size (try_decrypt returns NULL instead)",
+            "data", deterministic: true);
+        // trying a key over every candidate value of a config: one value too short for its IV must not abort the query
+        s.Fn("try_decrypt", 3, 6, a =>
+        {
+            if (a[0] == null) return null;
+            try
+            {
+                return Decrypt(Bytes(a[0], "data"), Str(a[1], "algorithm"), Bytes(a[2], "key"),
+                    a.Arg(3) == null ? null : Bytes(a[3], "iv"), Values.ToText(a.Arg(4)), Values.ToText(a.Arg(5)));
+            }
+            catch (SqlException) { return null; }
+        }, "try_decrypt(data, algorithm, key [, iv [, mode [, padding]]])",
+            "decrypt() for trial decryption over many values: NULL for every failure (wrong key or iv size, bad padding, unknown algorithm " +
+            "or mode) instead of an error. Use decrypt() when one value is being decoded, so a wrong argument says what is wrong",
             "data", deterministic: true);
         s.Fn("aes_decrypt", 2, 4, a => a[0] == null ? null : Decrypt(Bytes(a[0], "data"), "aes", Bytes(a[1], "key"),
                 a.Arg(2) == null ? null : Bytes(a[2], "iv"), Values.ToText(a.Arg(3)), null),

@@ -62,7 +62,8 @@ SELECT signature, mutates, description FROM dnspysql_functions WHERE name LIKE '
 ## Writes
 
 Writes are `UPDATE`/`INSERT`/`DELETE` and the functions marked `mutates`. Each statement is one undo group:
-`undo(n)`, `redo(n)`, the `transactions` table. `--readonly` refuses them. An UPDATE that reports 0 changed rows
+`undo(n)`, `redo(n)`, the `transactions` table. `--readonly` refuses them, and so does a session after
+`SELECT set_setting('read_only', 1)` (one way: it cannot be switched off). An UPDATE that reports 0 changed rows
 usually had a NULL `resolve()`. Model edits stay in memory until `save('new/path')` (`is_dirty()`). Annotations
 (`comments`, `tags`, `bookmarks`, `breakpoints`, `kv`) persist at once in the project file; `kv` is a scratchpad for
 notes that a later session can read.

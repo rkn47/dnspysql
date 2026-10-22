@@ -27,6 +27,20 @@ public sealed class EditTests : SampleTest
     }
 
     [Fact]
+    public void A_session_can_be_locked_read_only_but_not_unlocked()
+    {
+        using var live = new Live(Sample, "--no-project");
+        live.Q("update methods set name = 'Before' where name = 'Roll'");
+        Assert.Equal(1, live.Long("select set_setting('read_only', 0)")); // already writable: nothing to do
+        live.Q("select set_setting('read_only', 1)");
+        Assert.Equal("1", live.Scalar("select value from runtime_settings where key = 'read_only'"));
+        Assert.Contains("read-only", live.Error("update methods set name = 'After' where name = 'Before'"));
+        Assert.Contains("read-only", live.Error("select stub_return(resolve('Sample.Dice::Before'), 1)"));
+        Assert.Contains("can only be switched on", live.Error("select set_setting('read_only', 0)"));
+        Assert.Equal(1, live.Long("select count(*) from methods where name = 'Before'"));
+    }
+
+    [Fact]
     public void Undo_reverts_renames_of_locals_and_resources()
     {
         const string local = "select name from locals where method = resolve('Sample.MemberCard::Checksum') and idx = 1";
