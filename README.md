@@ -238,7 +238,7 @@ every dnSpy window and command to it.
 
 ### Tables
 
-Every table and view, by area (102 in all; click an area to open it). *writes* lists what the table
+Every table and view, by area (103 in all; click an area to open it). *writes* lists what the table
 accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused with `--readonly`. Columns are in
 [docs/SCHEMA.md](docs/SCHEMA.md).
 
@@ -329,15 +329,16 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 </details>
 
 <details>
-<summary><b>Triage: protection, capabilities, indicators, configs</b> (9)</summary>
+<summary><b>Triage: protection, capabilities, indicators, configs</b> (10)</summary>
 
 | table | writes | description |
 |---|---|---|
 | `capabilities` |  | What the code does, at the call or literal that shows it: injection, persistence, download and execute, keylogging, capture, credential theft and more |
-| `decryptor_calls` |  | Every call of a string decryptor with literal arguments: what it decrypts and where to break |
+| `decoded_fields` |  | Settings as the program decrypts them at startup: a settings class's fields after the method that decodes them in place (key from another field), interpreted |
+| `decryptor_calls` |  | Every call of a string decryptor with literal arguments (or settings fields of known value): what it decrypts, where to break, whether it is still ciphertext |
 | `embedded_pes` |  | PE files inside a module: in its file bytes (overlay, sections), in resources and `.resources` entries, also compressed or split across numbered resources |
-| `field_inits` |  | Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also computed by a getter or decryptor |
-| `iocs` |  | URLs, webhooks, Telegram tokens, IPs, domains, e-mails, wallets, registry keys and mutex names in literals, base64 literals, decrypted strings and text resources |
+| `field_inits` |  | Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also computed by a getter, decryptor or framework call |
+| `iocs` |  | URLs, webhooks, Telegram tokens, IPs, domains, host:port pairs, e-mails, wallets, registry keys and mutex names in literals, base64 literals, decrypted strings, decoded settings and text resources |
 | `protections` |  | Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques, with evidence |
 | `split_text` |  | A text cut at a `separator` (default ','), one row per piece: configs are often one delimited string (needs `WHERE text = ...`) |
 | `string_decryptors` |  | Methods shaped like a string decryptor, ranked by call sites with literal arguments |
@@ -609,9 +610,10 @@ from there.
 |---|---|
 | `field_inits` | The constants constructors store in fields (strings, numbers, byte arrays from field data, string arrays), and values computed from constants: a getter's, or a decryptor's result, interpreted (`source`). Malware settings classes are filled this way, so the host, port, mutex and key are usually one query away. `is_default` marks the compiler's stores of 0, false and "" for fields with an explicit initializer. |
 | `capabilities` | What the code does, at the call or string that shows it: process injection and hollowing, persistence, download and execute, in-memory loading, keylogging, screen capture, webcam and audio capture, credential theft, defense tampering, recovery inhibition, UAC bypass, hosts-file tampering, removable-drive spreading, shellcode execution, single instance, self-deletion, and network use (`SELECT DISTINCT kind FROM capabilities` lists what a sample has). APIs looked up by name (`GetProcAddress`, `GetMethod`) count too, and a call made through a proxy (a static method that only passes its arguments on, which obfuscators put in front of every API) is reported where the proxy is called. Call graphs (`callers`, `xrefs`) link an async method or iterator to its state machine's `MoveNext` (`kind = 'async'`), so a capability found there leads back to the method that started it. |
-| `iocs` | URLs, Discord webhooks, Telegram bots and tokens, IP addresses, domains, e-mail addresses, wallets, registry keys and mutex names in string literals, in base64 literals that decode to text, in what the string decryptors return (`source = 'decrypted'`), and in text resources and `.resources` strings (`source = 'resource'`, with the `resource`); a mutex name is the value handed to the `Mutex` constructor, also when it comes from a settings field or a decryptor (`source = 'computed'`). `is_library` marks hits in well-known library code. |
+| `iocs` | URLs, Discord webhooks, Telegram bots and tokens, IP addresses, domains, e-mail addresses, wallets, registry keys and mutex names in string literals, in base64 literals that decode to text, in what the string decryptors return (`source = 'decrypted'`), and in text resources and `.resources` strings (`source = 'resource'`, with the `resource`); a mutex name is the value handed to the `Mutex` constructor, also when it comes from a settings field or a decryptor (`source = 'computed'`), and a name that is still ciphertext says so (`source = 'encrypted'`). Settings decoded at startup are searched too (`source = 'decoded'`), and a settings class's host field and port field give `host:port` pairs (`fields` names both). `is_library` marks hits in well-known library code. |
+| `decoded_fields` | Settings the program decrypts at startup: a class whose static constructor stores string literals (usually ciphertext) and a parameterless static method that reads them and writes them back through a call, often with a key derived from another field (`Host = Decrypt(Host)`). The decoder is interpreted after the static constructor, and each field it changed has a row with its `initial` and decoded `value`; `error` says why a decoder stopped. Nothing here names a family: it is the shape settings code has. |
 | `embedded_pes` | Every PE a module carries: anywhere in its file bytes (the overlay, a section) and in resources or `.resources` entries, also behind gzip, zlib or deflate (Costura's compressed references, a loader's payload). The size comes from the PE headers, so `SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet` opens each next stage, named from its hash; a native one has its `machine` and `kind` (open_bytes leaves it out with a note). A PE stored in pieces across numbered resources or `.resources` entries (`part1`..`part3`, `chunk_00.bin`, ...) is put back together: the pieces joined in order or reversed, as bytes or as base64 text (also reversed), plain or compressed; `location` says which pieces and how they were joined. |
-| `decryptor_calls` | Every call of a string decryptor (`string_decryptors`, or any method with `WHERE decryptor =`) with literal arguments (also a static field holding a constant: `Decode(Config.Host)`), typed in `arg0`..`arg3`, and its `plaintext`: computed by interpreting the decryptor's IL (`emulation` says why when it cannot be). `emulate(method, args...)` does the same for any static method. |
+| `decryptor_calls` | Every call of a string decryptor (`string_decryptors`, or any method with `WHERE decryptor =`) with literal arguments (also a static field of known value: a constant, what a decryptor computed into it, or its `decoded_fields` value, so `Decode(Config.Host)` is interpreted; `args_from = 'field'`), typed in `arg0`..`arg3`, and its `plaintext`: computed by interpreting the decryptor's IL (`emulation` says why when it cannot be). `plaintext_kind = 'ciphertext'` marks a plaintext that is base64 of more ciphertext, a second layer another method decrypts. `emulate(method, args...)` does the same for any static method. |
 
 `SELECT triage()` (or `triage(module)`) puts these together as one JSON object, the first look at a sample in one
 call: its identity and anomalies, protections, embedded PEs, string decryptors with the plaintexts of up to 200 call
@@ -625,6 +627,7 @@ SELECT kind, value, source FROM iocs WHERE NOT is_library;
 SELECT kind, value FROM text_iocs WHERE text = (SELECT plaintext FROM decryptor_calls LIMIT 1);
 SELECT idx, value FROM split_text WHERE text = 'host|port|mutex' AND separator = '|';
 SELECT caller_name, offset, args, plaintext FROM decryptor_calls WHERE emulation = 'ok';
+SELECT field_name, value, decoder_name FROM decoded_fields WHERE field IS NOT NULL;
 SELECT emulate(resolve('App.Strings::Decode'), 'cGF5bG9hZA==');
 ```
 
@@ -634,7 +637,7 @@ The interpreter never runs the sample. It reads IL and computes the result itsel
 
 - **Calls into the sample** are interpreted the same way, including static constructors, struct-based decompressors
   and lambdas passed to LINQ. The module initializer runs first, as in the CLR, and a thread the code starts is not
-  run.
+  run. Pointers reach the module's own image (what anti-tamper routines decrypt) and `stackalloc` memory.
 - **Calls into the framework** are made only for an allowlist of types that compute on data in memory: strings,
   encodings, conversions, arrays, hashes and ciphers, in-memory and compression streams. VB's late-bound calls
   (`obj.Name(args)` on an `Object`) are bound by name the same way, and `typeof(T)` answers what generic code asks of

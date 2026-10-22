@@ -100,7 +100,8 @@ public static class ProtectionTables
 
         s.Db.Register(new Table<DecryptorCall>("decryptor_calls",
                 "Every call of a string decryptor (string_decryptors, or the method given as decryptor = handle) with literal " +
-                "arguments: what each site decrypts, and where to break in dnSpy to see the plaintext (bp_set(caller, offset))") { Domain = "triage" }
+                "arguments, or static fields whose value is known: what each site decrypts, and where to break in dnSpy to see the " +
+                "plaintext (bp_set(caller, offset))") { Domain = "triage" }
             .Source(c => ws.Modules(c).SelectMany(m => Calls(s, m, c.Long("decryptor"), (int)(c.Long("min_sites") ?? 5))))
             .Int("module", d => d.M.Id, pushdown: Pushdown.Eq)
             .Int("decryptor", d => d.M.H(d.Decryptor), pushdown: Pushdown.Eq, doc: "the decryptor method; WHERE decryptor = handle takes any method")
@@ -116,6 +117,11 @@ public static class ProtectionTables
             .Col("plaintext", SqlType.Any, d => d.Plain.Value.Value,
                 doc: "what the call returns, computed by interpreting the decryptor's IL (the sample is never run); NULL when it cannot be")
             .Text("emulation", d => d.Plain.Value.Status, doc: "ok, or why the decryptor could not be interpreted")
+            .Text("plaintext_kind", d => TriageTables.ValueKind(d.Plain.Value.Value),
+                doc: "text | base64 text | ciphertext (base64 of bytes that are not text: a second layer, decrypted by another method) | binary")
+            .Text("args_from", d => d.Args.Any(a => a.FromField) ? "field" : "literal",
+                doc: "literal, or field: an argument is a static field's value (a literal it holds, a decoder's result from decoded_fields, " +
+                     "or what a decryptor computed into it)")
             .Bool("is_library", d => TriageTables.IsLibrary(d.Decryptor), doc: "the decryptor belongs to a well-known library namespace")
             .Arg("min_sites", SqlType.Integer, _ => null, required: false, doc: "minimum call sites of a decryptor (default 5)")
             .Estimate(500, 50));
@@ -744,8 +750,8 @@ public static class ProtectionTables
         }
     }
 
-    /// <summary>A literal argument: its text as the decompiler would print it, and its value.</summary>
-    public sealed record Lit(string Text, object? Value);
+    /// <summary>A literal argument: its text as the decompiler would print it, and its value; FromField when a static field held it.</summary>
+    public sealed record Lit(string Text, object? Value, bool FromField = false);
 
     /// <summary>What folds to a literal: getters and static fields holding a constant, remembered per query.</summary>
     internal sealed class Fold(Session s)
@@ -815,10 +821,21 @@ public static class ProtectionTables
                 }
                 else if (!ReadsItself(ins, k, fd)) { other = true; break; }
             }
-            if (literal != null && !other) v = literal with { Text = $"{fd.Name} = {literal.Text}" };
+            if (literal != null && !other) v = literal with { Text = $"{fd.Name} = {literal.Text}", FromField = true };
+            // else the value the field has once the program started: a decoder's (decoded_fields) or what a decryptor
+            // computed into it in the static constructor, so Decrypt2(Settings.Host) is a call with a known argument
+            else if (TriageTables.KnownValue(fold.S, fd) is { Value: { } known })
+                v = new Lit($"{fd.Name} = {Shown(known)}", known, FromField: true);
         }
         return fold.Fields[fd] = v;
     }
+
+    static string Shown(object v) => v switch
+    {
+        string str => "\"" + (str.Length > 60 ? str[..60] + "…" : str) + "\"",
+        byte[] b => $"x'{Convert.ToHexString(b.AsSpan(0, Math.Min(b.Length, 16)))}{(b.Length > 16 ? "…" : "")}'",
+        _ => Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture) ?? "",
+    };
 
     // The value stored at a write is a call's result whose arguments read the field itself (F = Decode(F)).
     static bool ReadsItself(IList<Instruction> ins, int call, FieldDef fd)

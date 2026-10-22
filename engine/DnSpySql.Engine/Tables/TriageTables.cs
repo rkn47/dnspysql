@@ -17,7 +17,9 @@ public static class TriageTables
 {
     public sealed record FieldInit(LoadedModule M, IField Field, MethodDef SetIn, uint Offset, string Kind, object? Value, string Source = "literal");
     public sealed record Capability(LoadedModule M, string Kind, string Api, XRef Site, string Evidence);
-    public sealed record Ioc(LoadedModule M, string Kind, string Value, MethodDef? Method, uint Offset, string Source, string? Resource = null);
+    public sealed record Ioc(LoadedModule M, string Kind, string Value, MethodDef? Method, uint Offset, string Source, string? Resource = null, string? Fields = null);
+    /// <summary>A settings field as a decoder leaves it (Field null: the decoder changed none, and Error says why).</summary>
+    public sealed record Decoded(LoadedModule M, FieldDef? Field, TypeDef Settings, object? Initial, object? Value, MethodDef Decoder, uint Offset, string? Error);
 
     public static void Register(Session s)
     {
@@ -35,7 +37,8 @@ public static class TriageTables
             .Int("offset", f => f.Offset, doc: "IL offset of the store")
             .Text("kind", f => f.Kind, doc: "string | int | real | bool | bytes | string[]")
             .Col("value", SqlType.Any, f => f.Value, doc: "the value; a JSON array for string[]")
-            .Text("source", f => f.Source, doc: "literal | getter (a method returning a constant) | emulated (a decryptor called with literals, interpreted)")
+            .Text("source", f => f.Source, doc: "literal | getter (a method returning a constant) | emulated (a decryptor called with literals, interpreted) | " +
+                                                "cctor (what the static constructor leaves in the field, interpreted: Encoding.ASCII.GetBytes(\"...\"), say)")
             .Int("readers", f => f.Field is FieldDef fd ? s.Index.To(f.M.H(fd)).Count(x => x.Kind is "read" or "addr") : null,
                 doc: "instructions that read the field")
             .Bool("is_default", f => f.Value is null or 0L or 0 or false or "" || f.Value is double d && d == 0,
@@ -64,16 +67,39 @@ public static class TriageTables
                 "registry keys, mutex names") { Domain = "triage" }
             .Source(c => ws.Modules(c).SelectMany(m => Iocs(s, m)))
             .Int("module", r => r.M.Id, pushdown: Pushdown.Eq)
-            .Text("kind", r => r.Kind, doc: "url | discord webhook | telegram bot | telegram token | ip | domain | email | btc wallet | eth wallet | xmr wallet | registry | mutex")
+            .Text("kind", r => r.Kind, doc: "url | discord webhook | telegram bot | telegram token | ip | domain | host:port | email | btc wallet | eth wallet | " +
+                                           "xmr wallet | registry | mutex")
             .Text("value", r => r.Value)
             .Int("method", r => r.Method == null ? null : r.M.H(r.Method))
             .Text("method_name", r => r.Method?.FullName)
             .Int("offset", r => r.Method == null ? null : r.Offset, doc: "IL offset of the ldstr, or of the decryptor call")
             .Text("source", r => r.Source, doc: "literal | base64 (the literal decoded) | decrypted (a decryptor's plaintext, interpreted) | " +
-                "computed (a value handed to an API) | resource (text in a resource, or a .resources string)")
+                "decoded (a settings field as its decoder leaves it, interpreted: decoded_fields) | computed (a value handed to an API) | " +
+                "encrypted (a value handed to an API that is still ciphertext: its decoder could not be interpreted) | resource (text in a " +
+                "resource, or a .resources string)")
             .Text("resource", r => r.Resource, doc: "the resource (resource/element for a .resources entry) the indicator is in")
+            .Text("fields", r => r.Fields, doc: "the settings field(s) the value comes from (host:port names the host's field and the port's)")
             .Bool("is_library", r => r.Method != null && IsLibrary(r.Method), doc: "the method belongs to a well-known library namespace")
             .Estimate(100, 50));
+
+        s.Db.Register(new Table<Decoded>("decoded_fields",
+                "Settings as the program decodes them at startup: a type whose static constructor stores string literals (ciphertext, " +
+                "usually) and a parameterless static method that reads those fields and writes them back through a call (Host = " +
+                "Decrypt(Host), the key derived from another field). The decoder is interpreted after the static constructor, never " +
+                "run; one row per field it changed") { Domain = "triage" }
+            .Source(c => ws.Modules(c).SelectMany(m => DecodedFields(s, m)))
+            .Int("module", r => r.M.Id, pushdown: Pushdown.Eq)
+            .Int("field", r => r.Field == null ? null : r.M.H(r.Field), doc: "NULL when the decoder changed no field: error says why")
+            .Text("field_name", r => r.Field?.FullName)
+            .Text("type_name", r => r.Settings.FullName)
+            .Col("initial", SqlType.Any, r => r.Initial, doc: "what the static constructor stored")
+            .Col("value", SqlType.Any, r => r.Value, doc: "what the decoder left")
+            .Text("value_kind", r => ValueKind(r.Value), doc: "text | base64 text | ciphertext (still encrypted: another layer) | binary")
+            .Int("decoded_by", r => r.M.H(r.Decoder), doc: "the decoder method")
+            .Text("decoder_name", r => r.Decoder.FullName)
+            .Int("offset", r => r.Field == null ? null : r.Offset, doc: "IL offset in the decoder where it stores the field")
+            .Text("error", r => r.Error, doc: "why the decoder stopped, when it did (the fields it changed before that are still listed)")
+            .Estimate(20, 50));
     }
 
     public sealed record TextIoc(string Kind, string Value, string Source);
@@ -151,8 +177,163 @@ public static class TriageTables
                     {
                         if (Stored(ins, i, f) is { Kind: { } kind } v) yield return new FieldInit(m, f, ctor, ins[i].Offset, kind, v.Value);
                         else if (Computed(s, fold, ins, i) is { } c) yield return new FieldInit(m, f, ctor, ins[i].Offset, c.Kind, c.Value, c.Source);
+                        else if (ctor.IsStaticConstructor && ins[i].OpCode.Code == Code.Stsfld && FieldDefOf(f) is { } fd && fd.DeclaringType == t
+                                 && ConfigLike(fd) && FrameworkCall(s, ins, i) && Emulator.StaticValue(s, fd) is { Value: { } value })
+                            yield return new FieldInit(m, f, ctor, ins[i].Offset, KindOf(value), value, "cctor");
                     }
             }
+    }
+
+    static FieldDef? FieldDefOf(IField f)
+    {
+        try { return f.ResolveFieldDef(); } catch (Exception) { return null; } // a reference that does not resolve names no field here
+    }
+
+    // The kinds of field settings are kept in (strings, numbers, byte and string arrays): what a framework call computes
+    // into one in a static constructor (Encoding.ASCII.GetBytes("salt")) is a setting too.
+    static bool ConfigLike(FieldDef f) => f.FieldSig?.Type?.RemovePinnedAndModifiers() switch
+    {
+        SZArraySig a => a.Next?.ElementType is ElementType.U1 or ElementType.String,
+        { ElementType: ElementType.String or ElementType.I4 or ElementType.U4 or ElementType.I8 or ElementType.U8 or ElementType.Boolean } => true,
+        _ => false,
+    };
+
+    // The stored value is a framework call's result (not a method of an open module): what Stored and Computed leave out.
+    static bool FrameworkCall(Session s, IList<Instruction> ins, int store)
+    {
+        int k = Prev(ins, store);
+        if (k < 0 || ins[k].OpCode.Code is not (Code.Call or Code.Callvirt) || ins[k].Operand is not IMethod target) return false;
+        try { return target.ResolveMethodDef() is not { } d || s.Ws.Find(d.Module) == null; }
+        catch (Exception) { return true; }
+    }
+
+    // ---- decoded settings ----------------------------------------------------------------------------------------------
+
+    // Per module, until the next edit: what its decoders leave, and every static field's value once the program started.
+    sealed class Cache { public long Revision = -1; public List<Decoded>? Decoded; public Dictionary<FieldDef, (object? Value, string Source)>? Values; }
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LoadedModule, Cache> _caches = new();
+    // set while those are worked out: their own interpretation folds field arguments (ProtectionTables.FieldConst), which
+    // must not ask for them again
+    [ThreadStatic] static int _busy;
+
+    static Cache CacheOf(Session s, LoadedModule m)
+    {
+        var c = _caches.GetValue(m, _ => new Cache());
+        lock (c) if (c.Revision != s.Ws.Revision) (c.Revision, c.Decoded, c.Values) = (s.Ws.Revision, null, null);
+        return c;
+    }
+
+    const int MaxDecoders = 20;
+
+    internal static List<Decoded> DecodedFields(Session s, LoadedModule m)
+    {
+        var c = CacheOf(s, m);
+        lock (c)
+        {
+            if (c.Decoded != null) return c.Decoded;
+            _busy++;
+            try { return c.Decoded = FindDecoded(s, m).ToList(); }
+            finally { _busy--; }
+        }
+    }
+
+    // A settings type: its static constructor stores string literals into three or more of its static fields. Its decoders:
+    // parameterless static methods (not the static constructor) that read two or more of its static fields and store two
+    // or more back with a value a call returned. Nothing here is about one family; the shape is what settings code has.
+    static IEnumerable<Decoded> FindDecoded(Session s, LoadedModule m)
+    {
+        int decoders = 0;
+        foreach (var t in m.Module.GetTypes())
+        {
+            if (t.FindStaticConstructor() is not { } cctor || !TryBody(cctor, out var ins)) continue;
+            var literal = new HashSet<FieldDef>();
+            for (int i = 0; i < ins.Count; i++)
+                if (ins[i].OpCode.Code == Code.Stsfld && ins[i].Operand is IField f && Prev(ins, i) is var k and >= 0 && ins[k].OpCode.Code == Code.Ldstr
+                    && FieldDefOf(f) is { } fd && fd.DeclaringType == t)
+                    literal.Add(fd);
+            if (literal.Count < 3) continue;
+            var reads = new Dictionary<MethodDef, HashSet<FieldDef>>();
+            var writes = new Dictionary<MethodDef, Dictionary<FieldDef, uint>>();
+            foreach (var f in t.Fields.Where(f => f.IsStatic))
+                foreach (var x in s.Index.To(m.H(f)))
+                {
+                    if (x.From is not { IsStatic: true, IsStaticConstructor: false } from || from.MethodSig?.Params.Count != 0 || IsLibrary(from)) continue;
+                    if (x.Kind == "read") (reads.TryGetValue(from, out var r) ? r : reads[from] = new()).Add(f);
+                    else if (x.Kind == "write" && TryBody(from, out var body) && x.Index < body.Count && Prev(body, x.Index) is var p and >= 0
+                             && body[p].OpCode.Code is Code.Call or Code.Callvirt or Code.Newobj)
+                        (writes.TryGetValue(from, out var w) ? w : writes[from] = new()).TryAdd(f, x.Offset);
+                }
+            foreach (var (decoder, stored) in writes.Where(w => w.Value.Count >= 2 && reads.GetValueOrDefault(w.Key)?.Count >= 2).OrderBy(w => w.Key.MDToken.Raw))
+            {
+                if (++decoders > MaxDecoders) yield break;
+                var run = Emulator.Decode(s, decoder, t);
+                foreach (var (f, before, after) in run.Changed)
+                    yield return new Decoded(m, f, t, before, after, decoder, stored.GetValueOrDefault(f), run.Error);
+                if (run.Changed.Count == 0)
+                    yield return new Decoded(m, null, t, null, null, decoder, 0, run.Error ?? "the decoder left every field as the static constructor stored it");
+            }
+        }
+    }
+
+    /// <summary>Each field's value once the program has started: a decoder's over a computed one (a decryptor's result) over the stored literal.</summary>
+    internal static Dictionary<FieldDef, (object? Value, string Source)> FieldValues(Session s, LoadedModule m)
+    {
+        var c = CacheOf(s, m);
+        lock (c)
+        {
+            if (c.Values != null) return c.Values;
+            _busy++;
+            try
+            {
+                var values = new Dictionary<FieldDef, (object? Value, string Source)>();
+                foreach (var init in Inits(s, m))
+                    if (FieldDefOf(init.Field) is { } fd && (init.Source != "literal" || !values.ContainsKey(fd)))
+                        values[fd] = (init.Value, init.Source);
+                foreach (var d in DecodedFields(s, m))
+                    if (d.Field != null && d.Value != null) values[d.Field] = (d.Value, "decoded");
+                return c.Values = values;
+            }
+            finally { _busy--; }
+        }
+    }
+
+    /// <summary>A static field's known value (FieldValues), for folding Decode(Settings.Host) to a call with that value; null while it is being worked out.</summary>
+    internal static (object? Value, string Source)? KnownValue(Session s, FieldDef fd) =>
+        _busy > 0 || s.Ws.Find(fd.Module) is not { } lm ? null : FieldValues(s, lm).TryGetValue(fd, out var v) && v.Value != null ? v : null;
+
+    /// <summary>
+    /// What a value looks like: text | base64 text (base64 of readable text) | ciphertext (base64 of 16 or more bytes, a
+    /// multiple of 8, that are not text: another layer to decrypt) | binary.
+    /// </summary>
+    internal static string? ValueKind(object? v)
+    {
+        switch (v)
+        {
+            case null: return null;
+            case byte[]: return "binary";
+            case not string: return "text";
+        }
+        var s = (string)v;
+        if (s.Length >= 8 && s.Length % 4 == 0 && s.TrimEnd('=') is var core && s.Length - core.Length <= 2
+            && core.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '+' or '/'))
+        {
+            byte[] b;
+            try { b = Convert.FromBase64String(s); } catch (FormatException) { return "text"; }
+            if (Printable(b) >= 0.95) return "base64 text";
+            if (b.Length >= 16 && b.Length % 8 == 0 && Printable(b) < 0.75) return "ciphertext";
+            return "text";
+        }
+        return s.Count(ch => ch >= 0x20 && ch != 0x7F || ch is '\t' or '\r' or '\n') >= s.Length * 0.75 ? "text" : "binary";
+    }
+
+    // The share of bytes that are printable ASCII (or, for UTF-16 text, of its characters)
+    static double Printable(byte[] b)
+    {
+        if (b.Length == 0) return 1;
+        static bool P(byte x) => x is >= 0x20 and < 0x7F or (byte)'\t' or (byte)'\r' or (byte)'\n';
+        if (b.Length >= 4 && b.Length % 2 == 0 && Enumerable.Range(0, b.Length / 2).All(i => b[2 * i + 1] == 0))
+            return (double)Enumerable.Range(0, b.Length / 2).Count(i => P(b[2 * i])) / (b.Length / 2);
+        return (double)b.Count(P) / b.Length;
     }
 
     // The constant on the stack when the field is stored, or (null, null).
@@ -419,12 +600,14 @@ public static class TriageTables
     static readonly Regex Registry = new(@"^(?:HKEY_[A-Z_]+|HKLM|HKCU|HKCR|HKU)\\[^\\]|^(?:SOFTWARE|Software|SYSTEM|System)\\(?:Microsoft|Classes|Policies|CurrentControlSet|WOW6432Node)\\", Rx, MatchTimeout);
 
     // TLDs malware infrastructure uses, plus dynamic-DNS and tunnel suffixes; anything else as a bare name is too likely
-    // to be a file name or a namespace ("config.json", "System.Net").
+    // to be a file name or a namespace ("config.json", "System.Net"). The reserved names of RFC 2606 (example, test) are
+    // what documentation and test builds use.
     static readonly HashSet<string> Tlds = new(StringComparer.Ordinal)
     {
         "com", "net", "org", "ru", "io", "xyz", "top", "info", "biz", "cc", "tk", "me", "co", "us", "uk", "de", "cn", "su", "pw", "ws", "online",
         "site", "club", "live", "host", "fun", "store", "shop", "app", "dev", "gg", "ml", "ga", "cf", "gq", "in", "br", "fr", "nl", "it", "pl",
         "ir", "tr", "ua", "kz", "by", "eu", "to", "sh", "ly", "cloud", "space", "website", "tech", "icu", "buzz", "monster", "rest", "lol",
+        "example", "test",
     };
 
     const int MaxResourceText = 256 * 1024;
@@ -460,25 +643,34 @@ public static class TriageTables
             foreach (var (kind, value, source) in hits)
                 if (!(versionLike && kind == "ip")) yield return new Ioc(m, kind, value, x.From, x.Offset, source);
         }
-        // names handed to an API that takes one: a mutex's name, as a literal, a field's initial value or a decrypted string
+        // names handed to an API that takes one: a mutex's name, as a literal, a field's value once the program started
+        // (decoded at startup, computed by a decryptor, or stored) or a decrypted string
         var fold = new ProtectionTables.Fold(s);
-        Dictionary<FieldDef, object?>? inits = null;
         foreach (var x in s.Index.All.Where(x => x.M == m && x.IsCall && x.ToName.Contains(" System.Threading.Mutex::", StringComparison.Ordinal)))
         {
             if (x.Operand is not IMethod api || api.MethodSig?.Params is not { } ps) continue;
             int k = -1;
             for (int i = 0; i < ps.Count && k < 0; i++) if (ps[i].ElementType == ElementType.String) k = i;
             if (k < 0 || !TryBody(x.From, out var ins) || x.Index >= ins.Count || ArgumentProducer(ins, x.Index, ps.Count - 1 - k) is not int at) continue;
-            object? name = ins[at].OpCode.Code switch
+            (object? Value, string Source) name = ins[at].OpCode.Code switch
             {
-                Code.Ldstr => ins[at].Operand as string,
-                Code.Ldsfld when ins[at].Operand is IField f && f.ResolveFieldDef() is { } fd
-                    => (inits ??= InitialValues(s, m)).GetValueOrDefault(fd),
-                Code.Call => Computed(s, fold, ins, at + 1)?.Value,
-                _ => null,
+                Code.Ldstr => (ins[at].Operand as string, "literal"),
+                Code.Ldsfld when ins[at].Operand is IField f && FieldDefOf(f) is { } fd && FieldValues(s, m).TryGetValue(fd, out var fv)
+                    => (fv.Value, fv.Source == "decoded" ? "decoded" : "computed"),
+                Code.Call => (Computed(s, fold, ins, at + 1)?.Value, "computed"),
+                _ => default,
             };
-            if (name is string { Length: > 0 } n) yield return new Ioc(m, "mutex", n, x.From, x.Offset, ins[at].OpCode.Code == Code.Ldstr ? "literal" : "computed");
+            // a name that is still base64 ciphertext is what the program decrypts before using it: not the mutex's name
+            if (name.Value is string { Length: > 0 } n)
+                yield return new Ioc(m, "mutex", n, x.From, x.Offset, name.Source != "literal" && ValueKind(n) == "ciphertext" ? "encrypted" : name.Source,
+                    Fields: ins[at].Operand is IField nf ? nf.FullName : null);
         }
+        // settings as their decoders leave them (decoded_fields), and a host field with a port field beside it
+        foreach (var d in DecodedFields(s, m))
+            if (d.Field != null && d.Value is string decoded)
+                foreach (var (kind, value) in Find(decoded.Length > MaxLiteral ? decoded[..MaxLiteral] : decoded))
+                    yield return new Ioc(m, kind, value, d.Decoder, d.Offset, "decoded", Fields: d.Field.FullName);
+        foreach (var pair in HostPorts(s, m)) yield return pair;
         // text the program carries in its resources: a config file, a script, a .resources string
         foreach (var res in m.Module.Resources.OfType<EmbeddedResource>())
         {
@@ -522,14 +714,34 @@ public static class TriageTables
         return null;
     }
 
-    // Each static field's value once the program has started: the computed one (a decryptor's result) over the stored literal.
-    static Dictionary<FieldDef, object?> InitialValues(Session s, LoadedModule m)
+    const int MaxPairs = 20;
+    static readonly Regex PortList = new(@"^\s*\d{1,5}(?:\s*[,;|]\s*\d{1,5})*\s*$", Rx, MatchTimeout);
+
+    // A settings type keeps its hosts in one field and its ports in another ("a.example,b.example" and "8080,443"): a C2
+    // is the pair, which neither value shows alone. Pairs of the first host field and the first port field of each type.
+    static IEnumerable<Ioc> HostPorts(Session s, LoadedModule m)
     {
-        var values = new Dictionary<FieldDef, object?>();
-        foreach (var init in Inits(s, m))
-            if (init.Field.ResolveFieldDef() is { } fd && (init.Source != "literal" || !values.ContainsKey(fd)))
-                values[fd] = init.Value;
-        return values;
+        var values = FieldValues(s, m).Where(kv => kv.Key.IsStatic && kv.Key.DeclaringType != null);
+        foreach (var type in values.GroupBy(kv => kv.Key.DeclaringType))
+        {
+            var fields = type.OrderBy(kv => kv.Key.MDToken.Raw).ToList();
+            var host = fields.Select(kv => (kv.Key, kv.Value, Hosts: kv.Value.Value is string v ? Find(v).Where(h => h.Kind == "domain" && !h.Value.Contains(':')
+                                                                                                       || h.Kind == "ip" && !h.Value.Contains(':')).Select(h => h.Value).Distinct().ToList() : []))
+                .FirstOrDefault(h => h.Hosts.Count > 0);
+            var port = fields.Select(kv => (kv.Key, kv.Value, Ports: Ports(kv.Value.Value))).FirstOrDefault(p => p.Ports.Count > 0);
+            if (host.Key == null || port.Key == null) continue;
+            var source = host.Value.Source == "decoded" || port.Value.Source == "decoded" ? "decoded" : host.Value.Source;
+            foreach (var pair in host.Hosts.SelectMany(h => port.Ports.Select(p => $"{h}:{p}")).Take(MaxPairs))
+                yield return new Ioc(m, "host:port", pair, null, 0, source, Fields: $"{host.Key.FullName} + {port.Key.FullName}");
+        }
+    }
+
+    static List<int> Ports(object? v)
+    {
+        if (v is long l) return l is >= 1 and <= 65535 ? [(int)l] : [];
+        if (v is not string s || s.Length > 200 || !PortList.IsMatch(s)) return [];
+        var ports = s.Split([',', ';', '|'], StringSplitOptions.TrimEntries).Select(p => int.TryParse(p, out var n) ? n : 0).ToList();
+        return ports.All(p => p is >= 1 and <= 65535) ? ports.Distinct().ToList() : [];
     }
 
     // XML namespaces and schema identifiers are URLs nobody connects to; a host without a dot or a port ("http://update")

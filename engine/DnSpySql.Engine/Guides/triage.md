@@ -30,14 +30,21 @@ SELECT kind, api, method_name, offset, evidence FROM capabilities WHERE NOT is_l
 SELECT kind, value, source, method_name, resource FROM iocs WHERE NOT is_library ORDER BY kind;
 ```
 
-`iocs.source`: literal, base64, decrypted (a decryptor's result, interpreted), computed (a value handed to an API),
-resource.
+`iocs.source`: literal, base64, decrypted (a decryptor's result, interpreted), decoded (a settings field as its decoder
+leaves it), computed (a value handed to an API), encrypted (a value handed to an API that is still ciphertext), resource.
+`kind = 'host:port'` pairs a settings class's host field with its port field.
+
+A config is often a settings class whose fields hold ciphertext, decrypted in place at startup with a key derived from
+another field: `decoded_fields` has the values the program uses. A plaintext with `plaintext_kind = 'ciphertext'` is a
+first layer: look for the method that decrypts it in turn (`decoded_fields`, or `decryptor_calls WHERE args_from = 'field'`).
 
 ## 4. Config
 
 ```sql
 SELECT type_name, field_name, kind, value, source FROM field_inits WHERE NOT is_default ORDER BY type_name, offset;
-SELECT caller_name, offset, args, plaintext FROM decryptor_calls WHERE emulation = 'ok';
+SELECT type_name, field_name, value, value_kind, decoder_name, error FROM decoded_fields;   -- settings decrypted at startup
+SELECT caller_name, offset, args, plaintext, plaintext_kind FROM decryptor_calls WHERE emulation = 'ok';
+SELECT caller_name, args, plaintext FROM decryptor_calls WHERE args_from = 'field';   -- Decrypt(Settings.Host)
 SELECT emulation, count(*) FROM decryptor_calls GROUP BY 1;
 SELECT caller_name, args, plaintext FROM decryptor_calls WHERE decryptor = resolve('a.b::c');   -- any method
 SELECT emulate(resolve('Ns.Crypto::Decrypt'), 'base64ciphertext==');

@@ -134,30 +134,89 @@ public sealed class Emulator
         _cancel = cancel ?? (() => CancellationToken.None);
     }
 
-    // One per session, holding the sample's static state (a decryptor's tables, initialized once like the CLR would),
-    // and started afresh after any edit to the model.
-    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, StrongBox> _sessions = new();
+    // One per session (and purpose), holding the sample's static state (a decryptor's tables, initialized once like the
+    // CLR would), and started afresh after any edit to the model.
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, Dictionary<string, StrongBox>> _sessions = new();
     sealed class StrongBox { public long Revision = -1; public Emulator? Value; }
 
-    public static Emulator For(Session s)
+    public static Emulator For(Session s) => For(s, "calls", 200_000_000);
+
+    // field_inits asks what static constructors leave in fields: a smaller budget per constructor, since it may ask of
+    // every settings type of a module, and in an interpreter of its own, whose static state no decryptor call shares
+    static Emulator For(Session s, string purpose, long maxStaticSteps)
     {
-        var box = _sessions.GetValue(s, _ => new StrongBox());
-        lock (box)
+        var boxes = _sessions.GetValue(s, _ => new());
+        lock (boxes)
         {
+            if (!boxes.TryGetValue(purpose, out var box)) boxes[purpose] = box = new StrongBox();
             if (box.Value == null || box.Revision != s.Ws.Revision)
             {
-                box.Value = new Emulator(s, () => s.Db.Cancellation);
+                box.Value = new Emulator(s, () => s.Db.Cancellation) { MaxStaticSteps = maxStaticSteps };
                 box.Revision = s.Ws.Revision;
             }
             return box.Value;
         }
     }
 
-    /// <summary>Lets go of the session's interpreter and the state it holds (static fields, an image copy, results): close() frees them.</summary>
+    /// <summary>Lets go of the session's interpreters and the state they hold (static fields, an image copy, results): close() frees them.</summary>
     public static void Reset(Session s)
     {
-        if (!_sessions.TryGetValue(s, out var box)) return;
-        lock (box) { box.Value = null; box.Revision = -1; }
+        if (!_sessions.TryGetValue(s, out var boxes)) return;
+        lock (boxes) boxes.Clear();
+    }
+
+    /// <summary>What a decoder did to a settings type's static fields: each field it changed (SQL values before and after), and why it stopped, if it did.</summary>
+    public sealed record DecoderRun(IReadOnlyList<(FieldDef Field, object? Before, object? After)> Changed, string? Error);
+
+    /// <summary>
+    /// Interprets a decoder: a parameterless static method that rewrites a settings type's static fields at startup
+    /// (Host = Decrypt(Host), with a key derived from another field). The type's static constructor runs first, as in the
+    /// CLR. A fresh interpreter each time, so the decoded state does not leak into other results.
+    /// </summary>
+    public static DecoderRun Decode(Session s, MethodDef decoder, TypeDef settings)
+    {
+        var e = new Emulator(s, () => s.Db.Cancellation);
+        lock (e._gate) return e.DecodeLocked(decoder, settings);
+    }
+
+    DecoderRun DecodeLocked(MethodDef decoder, TypeDef settings)
+    {
+        (_steps, _limit, _at, _scratchUsed) = (0, MaxStaticSteps, default, 0);
+        var fields = settings.Fields.Where(f => f.IsStatic && !f.IsLiteral).ToList();
+        var before = new Dictionary<FieldDef, object?>();
+        string? error = null;
+        // a byte[] field decrypted in place is the same array: what it held before is a copy
+        object? Value(FieldDef f) => ToSql(_statics.GetValueOrDefault(f)) is byte[] b ? b.Clone() : ToSql(_statics.GetValueOrDefault(f));
+        try
+        {
+            EnsureStaticInit(settings, 0);
+            foreach (var f in fields) before[f] = Value(f);
+            (_steps, _limit) = (0, MaxStaticSteps);
+            Invoke(decoder, [], null, 0);
+        }
+        catch (Failed e) { error = Locate(e).Message; }
+        catch (Exception e) when (e is not (OperationCanceledException or OutOfMemoryException))
+        { error = Locate(new Failed($"emulator error {e.GetType().Name}: {e.Message}")).Message; }
+        var changed = new List<(FieldDef, object?, object?)>();
+        foreach (var f in fields)
+            if (before.TryGetValue(f, out var b) && Value(f) is var a && !SameSql(a, b)) changed.Add((f, b, a));
+        if (error == null && changed.Count == 0 && _initFailed.TryGetValue(settings, out var why)) error = why;
+        return new DecoderRun(changed, error);
+    }
+
+    static bool SameSql(object? a, object? b) => a is byte[] x && b is byte[] y ? x.AsSpan().SequenceEqual(y) : Equals(a, b);
+
+    /// <summary>The value the static constructor of the field's type leaves in it (interpreted), or why there is none.</summary>
+    public static (object? Value, string? Error) StaticValue(Session s, FieldDef f)
+    {
+        var e = For(s, "statics", 2_000_000);
+        lock (e._gate)
+        {
+            (e._steps, e._limit, e._at, e._scratchUsed) = (0, e.MaxStaticSteps, default, 0);
+            e.EnsureStaticInit(f.DeclaringType, 0);
+            var v = ToSql(e._statics.GetValueOrDefault(f));
+            return v != null ? (v, null) : (null, e._initFailed.GetValueOrDefault(f.DeclaringType) ?? e._skipped.GetValueOrDefault(f.DeclaringType));
+        }
     }
 
     readonly Dictionary<string, (object? Value, string? Error)> _memo = new(StringComparer.Ordinal);
