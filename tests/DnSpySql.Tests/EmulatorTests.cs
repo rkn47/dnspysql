@@ -37,6 +37,33 @@ public sealed class EmulatorTests : SampleTest
     }
 
     [Fact]
+    public void Stack_memory_and_block_copies_are_interpreted()
+    {
+        // stackalloc (localloc) filled in a loop; then two placeholder calls become cpblk and initblk, which C# never emits
+        const string blocks = "select idx from il where method = resolve('Scratch::Blocks') and opcode = 'call' and operand_text like ";
+        var r = Run("select add_type('public static unsafe class Scratch { " +
+                    "public static int Sum(int n) { byte* p = stackalloc byte[32]; for (int i = 0; i < 32; i++) p[i] = (byte)(i * 7 + n); " +
+                    "int s = 0; for (int i = 0; i < 32; i++) s = s * 31 + p[i]; return s; } " +
+                    "public static int Blocks() { byte* a = stackalloc byte[16]; byte* b = stackalloc byte[16]; for (int i = 0; i < 16; i++) a[i] = (byte)(i + 1); " +
+                    "Copy(b, a, 16); Fill(a, 90, 4); int s = 0; for (int i = 0; i < 16; i++) s = s * 31 + a[i] * 3 + b[i]; return s; } " +
+                    "static void Copy(byte* d, byte* s, int n) { } static void Fill(byte* d, int v, int n) { } }')",
+            $"select il_set(resolve('Scratch::Blocks'), ({blocks}'%Copy%'), 'cpblk')",
+            $"select il_set(resolve('Scratch::Blocks'), ({blocks}'%Fill%'), 'initblk')",
+            "select emulate(resolve('Scratch::Sum'), 5)", "select emulate(resolve('Scratch::Blocks'))");
+        int sum = 0;
+        for (int i = 0; i < 32; i++) sum = sum * 31 + (byte)(i * 7 + 5);
+        Assert.Equal(sum, r.Long(3));
+        var a = Enumerable.Range(1, 16).Select(i => (byte)i).ToArray();
+        var b = (byte[])a.Clone();
+        for (int i = 0; i < 4; i++) a[i] = 90;
+        int s = 0;
+        for (int i = 0; i < 16; i++) s = s * 31 + a[i] * 3 + b[i];
+        Assert.Equal(s, r.Long(4));
+        Assert.Contains("localloc of", Cli.Run(Sample, "select add_type('public static unsafe class Huge { public static int M() { byte* p = stackalloc byte[64 << 20]; return p[0]; } }')",
+            "select emulate(resolve('Huge::M'))").Error);
+    }
+
+    [Fact]
     public void A_type_that_is_its_own_base_is_seen_once()
     {
         var cyc = Cli.Run(Sample,

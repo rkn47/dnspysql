@@ -178,18 +178,45 @@ public sealed class Emulator
         return _image;
     }
 
-    int At(object? address, int size)
+    // localloc (stackalloc): memory of its own at addresses far from the image's, zeroed as .locals init has it. Nothing
+    // is freed within a call; the next call starts it over.
+    const long ScratchBase = 0x70000000;
+    const int MaxScratch = 16 << 20;
+    byte[] _scratch = [];
+    int _scratchUsed;
+
+    long Localloc(long n)
+    {
+        if (n < 0 || n > MaxScratch - _scratchUsed) throw new Failed($"localloc of {n} bytes (more than {MaxScratch >> 20} MB in one call)");
+        int at = (_scratchUsed + 7) & ~7, end = (int)Math.Min(at + n, MaxScratch);
+        if (end > _scratch.Length) Array.Resize(ref _scratch, Math.Min(MaxScratch, Math.Max(end, _scratch.Length * 2)));
+        Array.Clear(_scratch, at, end - at); // used before, by an earlier call
+        _scratchUsed = end;
+        return ScratchBase + at;
+    }
+
+    // The bytes a pointer addresses: in the scratch memory, or in the module image.
+    (byte[] Buffer, int Offset) At(object? address, int size)
     {
         long a = address switch { long l => l, int i => (uint)i, _ => throw new Failed($"pointer access through a {Describe(address)}") };
+        if (a >= ScratchBase && a - ScratchBase <= _scratchUsed - size) return (_scratch, (int)(a - ScratchBase));
         long off = a - ImageBase;
         if (_image == null || off < 0 || off + size > _image.Length) throw new Failed($"pointer 0x{a:X} outside the module image");
-        return (int)off;
+        return (_image, (int)off);
+    }
+
+    Span<byte> Bytes(object? address, int size)
+    {
+        var (buffer, offset) = At(address, size);
+        if (buffer == _image) _written += size;
+        return buffer.AsSpan(offset, size);
     }
 
     object Read(Code op, object? address)
     {
         int size = op switch { Code.Ldind_I1 or Code.Ldind_U1 => 1, Code.Ldind_I2 or Code.Ldind_U2 => 2, Code.Ldind_I8 or Code.Ldind_I or Code.Ldind_R8 => 8, _ => 4 };
-        var span = _image.AsSpan(At(address, size), size);
+        var (buffer, offset) = At(address, size);
+        var span = buffer.AsSpan(offset, size);
         // each arm boxed as itself: a switch expression would otherwise widen them all to double
         return op switch
         {
@@ -202,13 +229,12 @@ public sealed class Emulator
         };
     }
 
-    long _written; // bytes stored into the image
+    long _written; // bytes stored into the image (not the scratch memory)
 
     void Write(Code op, object? address, object? v)
     {
         int size = op switch { Code.Stind_I1 => 1, Code.Stind_I2 => 2, Code.Stind_I8 or Code.Stind_I or Code.Stind_R8 => 8, _ => 4 };
-        var span = _image.AsSpan(At(address, size), size);
-        _written += size;
+        var span = Bytes(address, size);
         long l = v switch { int i => i, long x => x, double d => (long)d, _ => throw new Failed($"{op} of a {Describe(v)}") };
         switch (size)
         {
@@ -233,6 +259,7 @@ public sealed class Emulator
             (_steps, _limit) = (0, MaxStaticSteps);
             _untampering = true;
             _at = default;
+            _scratchUsed = 0;
             try { Invoke(initializer, [], null, 0); }
             catch (Decrypted) { } // it went on to call code it had just decrypted: its work is done
             catch (Failed e) { throw Locate(e); }
@@ -273,6 +300,7 @@ public sealed class Emulator
         _steps = 0;
         _limit = MaxSteps;
         _at = default;
+        _scratchUsed = 0;
         if (!method.IsStatic) throw new Failed("only static methods can be called directly");
         var a = new object?[method.Parameters.Count];
         if (args.Count != a.Length) throw new Failed($"{method.Name} takes {a.Length} argument(s), got {args.Count}");
@@ -507,6 +535,32 @@ public sealed class Emulator
                         AsRef(stack.Pop()).Set(Zero(t.ToTypeSig()));
                         break;
                     }
+                // stackalloc, and the block copies and fills anti-tamper routines run over it and the image
+                case Code.Localloc: stack.Push(Localloc(AsLong(stack.Pop()))); break;
+                case Code.Cpblk:
+                    {
+                        long n = AsLong(stack.Pop()); var src = stack.Pop(); var dst = stack.Pop();
+                        if (n < 0 || n > int.MaxValue) throw new Failed($"cpblk of {n} bytes");
+                        if (n > 0) { var (sb, so) = At(src, (int)n); sb.AsSpan(so, (int)n).CopyTo(Bytes(dst, (int)n)); }
+                        break;
+                    }
+                case Code.Initblk:
+                    {
+                        long n = AsLong(stack.Pop()); var value = (byte)AsLong(stack.Pop()); var dst = stack.Pop();
+                        if (n < 0 || n > int.MaxValue) throw new Failed($"initblk of {n} bytes");
+                        if (n > 0) Bytes(dst, (int)n).Fill(value);
+                        break;
+                    }
+                case Code.Sizeof:
+                    stack.Push(((ITypeDefOrRef)x.Operand).ToTypeSig().RemovePinnedAndModifiers().ElementType switch
+                    {
+                        ElementType.Boolean or ElementType.I1 or ElementType.U1 => 1,
+                        ElementType.Char or ElementType.I2 or ElementType.U2 => 2,
+                        ElementType.I4 or ElementType.U4 or ElementType.R4 => 4,
+                        ElementType.I8 or ElementType.U8 or ElementType.R8 or ElementType.I or ElementType.U or ElementType.Ptr or ElementType.FnPtr => 8,
+                        _ => throw new Failed($"sizeof({x.Operand}): the size of a struct is not modelled"),
+                    });
+                    break;
 
                 case Code.Ldsfld: stack.Push(LoadStatic((IField)x.Operand, depth)); break;
                 case Code.Stsfld: StoreStatic((IField)x.Operand, stack.Pop(), depth); break;
