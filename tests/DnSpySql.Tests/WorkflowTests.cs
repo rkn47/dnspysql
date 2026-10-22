@@ -60,6 +60,34 @@ public sealed class WorkflowTests : SampleTest
         Assert.Equal(82, both.Long("select count(*) from modules"));
     }
 
+    static List<string> Next(Live live, long module) =>
+        JsonDocument.Parse((string)live.Scalar($"select triage({module})")!).RootElement.GetProperty("next").EnumerateArray().Select(x => x.GetString()!).ToList();
+
+    static string Statement(string next) => next.IndexOf("  --", StringComparison.Ordinal) is var i and >= 0 ? next[..i] : next;
+
+    [Fact]
+    public void Every_triage_suggestion_runs_as_written()
+    {
+        // a stage, an encrypted-looking resource, and a generic settings class (its field stores name a TypeSpec)
+        var carrier = PathIn("Carrier.dll");
+        Run($"INSERT INTO resources(name, data) VALUES ('stage.dll', x'{Convert.ToHexString(File.ReadAllBytes(TargetDll))}')",
+            "INSERT INTO resources(name, data) SELECT 'blob.bin', unhex(group_concat(x, '')) FROM " +
+            "(WITH RECURSIVE h(i, x) AS (SELECT 0, sha256('seed') UNION ALL SELECT i + 1, sha256(x) FROM h WHERE i < 255) SELECT x FROM h)",
+            "select add_type('namespace Sample { public static class Gen<T> { public static string A = \"a1\", B = \"b1\", C = \"c1\", D = \"d1\", " +
+            "E = \"e1\", F = \"f1\", G = \"g1\", H = \"h1\"; } }')",
+            $"select save({Cli.Sql(carrier)})");
+        using var live = new Live(carrier, "--no-project");
+        var first = Next(live, 1);
+        Assert.Contains(first, n => n.StartsWith("SELECT text FROM dnspysql_guides WHERE topic = 'unpack'  -- resource 'blob.bin' is high entropy"));
+        var decompile = first.Single(n => n.Contains("the type with the most stored constants"));
+        Assert.Contains("-- Sample.Gen`1:", decompile);
+        Assert.Contains("class Gen<T>", (string)live.Scalar(Statement(decompile))!);
+        foreach (var module in new long[] { 1, 2 }) // the stage the open_bytes() suggestion opens, too
+            foreach (var n in module == 1 ? first : Next(live, module))
+                Assert.True(live.Error(Statement(n)) is null, $"{n}\n=> {live.Error(Statement(n))}");
+        Assert.Equal(2, live.Long("select count(*) from modules"));
+    }
+
     [Fact]
     public void Triage_points_at_types_by_handle()
     {

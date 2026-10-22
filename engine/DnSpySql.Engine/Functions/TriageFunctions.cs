@@ -134,9 +134,10 @@ public static class TriageFunctions
         {
             ["type"] = f.Field.DeclaringType!.FullName, ["field"] = f.Field.Name.String, ["kind"] = f.Kind, ["value"] = Value(f.Value), ["source"] = f.Source,
         }));
-        // by handle: a name can be in several open modules (an untamper() copy has all of them), and obfuscated ones are unreadable
-        if (byType.Count > 0)
-            next.Add($"SELECT decompile('{Handle.Hex(m.H(byType[0].First().Field.DeclaringType))}')  -- {OneLine(byType[0].Key)}: the type with the most stored constants");
+        // by handle: a name can be in several open modules (an untamper() copy has all of them), and obfuscated ones are unreadable;
+        // a store into a generic type's field names it as a TypeSpec (Gen`1<!0>), which decompile() refuses: its definition
+        if (byType.Select(g => TypeDefOf(g.First().Field)).FirstOrDefault(t => t?.Module == md) is { } top)
+            next.Add($"SELECT decompile('{Handle.Hex(m.H(top))}')  -- {OneLine(top.FullName)}: the type with the most stored constants");
 
         var resources = md.Resources.OfType<EmbeddedResource>().ToList();
         o["resources"] = Counted(resources.Count, resources.Take(MaxShown).Select(r =>
@@ -144,16 +145,25 @@ public static class TriageFunctions
             var head = r.CreateReader().ReadBytes((int)Math.Min(64 * 1024, r.Length));
             return (JsonNode?)new JsonObject { ["name"] = r.Name.String, ["size"] = (long)r.Length, ["content_type"] = ResourceTables.Content(head) };
         }));
+        // every next item is a statement that runs as written; the advice goes in its comment. A compressed resource that
+        // embedded_pes already inflated to a PE (Costura's DLLs) is decoded: the open_bytes() item above covers it.
         foreach (var r in o["resources"]!["items"]!.AsArray())
-            if (r!["content_type"]!.GetValue<string>() is "high entropy" or "gzip" or "zlib" or "deflate")
-            {
-                next.Add($"resource {Quote(OneLine(r["name"]!.GetValue<string>()))} is {r["content_type"]}: find its loader and decode it (SELECT text FROM dnspysql_guides WHERE topic = 'unpack')");
-                break;
-            }
+        {
+            var name = r!["name"]!.GetValue<string>();
+            if (r["content_type"]!.GetValue<string>() is not ("high entropy" or "gzip" or "zlib" or "deflate")
+                || carved.Any(c => c.Location.StartsWith($"resource '{name}'", StringComparison.Ordinal))) continue;
+            next.Add($"SELECT text FROM dnspysql_guides WHERE topic = 'unpack'  -- resource {Quote(OneLine(name))} is {r["content_type"]}: find its loader and decode it");
+            break;
+        }
 
         if (caps.Count > 0) next.Add($"SELECT kind, api, method_name, offset FROM capabilities WHERE module = {m.Id} AND NOT is_library  -- every capability site");
         o["next"] = Array(next.Select(x => (JsonNode?)x));
         return o;
+    }
+
+    static TypeDef? TypeDefOf(IField f)
+    {
+        try { return f.DeclaringType?.ResolveTypeDef(); } catch (Exception) { return null; } // an unresolvable reference names no type here
     }
 
     static JsonObject Member(LoadedModule m, MethodDef md, string kind) => new() { ["kind"] = kind, ["method"] = m.H(md), ["name"] = md.FullName };
