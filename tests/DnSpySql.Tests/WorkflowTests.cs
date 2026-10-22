@@ -36,6 +36,31 @@ public sealed class WorkflowTests : SampleTest
     }
 
     [Fact]
+    public void Opening_every_stage_of_a_scan_survives_its_later_batches()
+    {
+        // 80 different .NET stages (one DOS-stub byte apart): the host reads a scan in batches of 64, then more, and each
+        // open_bytes() adds a module while the scan over the module list is still going
+        var carrier = PathIn("Carrier.dll");
+        Run($"INSERT INTO resources(name, data) VALUES ('stage0.dll', x'{Convert.ToHexString(File.ReadAllBytes(TargetDll))}')",
+            "CREATE TEMP TABLE src AS SELECT data FROM resources WHERE name = 'stage0.dll'",
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 79) INSERT INTO resources(name, data) " +
+            "SELECT 'stage' || i || '.dll', concat_bytes(substr(data, 1, 78), unhex(printf('%02X', i)), substr(data, 80)) FROM n, src",
+            $"select save({Cli.Sql(carrier)})");
+        using (var live = new Live(carrier, "--no-project"))
+        {
+            Assert.Equal(80, live.Long("select count(open_bytes(data)) from embedded_pes where module = 1 and is_dotnet"));
+            Assert.Equal(81, live.Long("select count(*) from modules"));
+        }
+        // no module filter: the scan walks the module list itself
+        var copy = PathIn("Copy.dll");
+        File.Copy(carrier, copy);
+        using var both = new Live(carrier, "--no-project");
+        both.Q($"select open({Cli.Sql(copy)})");
+        Assert.Equal(160, both.Long("select count(open_bytes(data)) from embedded_pes where is_dotnet"));
+        Assert.Equal(82, both.Long("select count(*) from modules"));
+    }
+
+    [Fact]
     public void Triage_points_at_types_by_handle()
     {
         var next = JsonDocument.Parse(Run("select triage()").Text()).RootElement.GetProperty("next").EnumerateArray().Select(x => x.GetString()!).ToList();

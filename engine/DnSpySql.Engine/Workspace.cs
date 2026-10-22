@@ -88,8 +88,13 @@ public sealed class JournalEntry
 /// <summary>The analysis session: loaded modules, resolver, undo journal.</summary>
 public sealed class Workspace : IWriteSink, IDisposable
 {
-    readonly List<LoadedModule> _modules = new();
+    // Copy on write: a scan enumerates the array it started with, so a function in the same statement that opens a module
+    // (open_bytes() over embedded_pes, untamper(), open()) or closes one cannot break the enumeration ("Collection was
+    // modified" once the host asked for the scan's second batch). Reads stay allocation-free.
+    LoadedModule[] _modules = [];
     public IReadOnlyList<LoadedModule> Modules => _modules;
+    // Ids are never reused: a handle (module << 32 | token) kept from a closed module must not address a later one.
+    int _nextId;
     public ModuleContext Context { get; }
     public SafeAssemblyResolver Resolver { get; }
     public int CurrentModuleId { get; set; } = 1;
@@ -196,9 +201,9 @@ public sealed class Workspace : IWriteSink, IDisposable
 
     public LoadedModule OpenBytes(byte[] bytes, string pseudoPath, bool memoryLayout = false, LoadedModule? untamperedFrom = null, uint untamperedBy = 0)
     {
-        int count = _modules.Count;
+        int count = _modules.Length;
         var lm = OpenBytesCore(bytes, pseudoPath, memoryLayout);
-        if (_modules.Count == count) return lm; // the module of that name, opened before
+        if (_modules.Length == count) return lm; // the module of that name, opened before
         if (untamperedFrom != null) (lm.Origin, lm.DerivedFrom, lm.UntamperedBy) = ("untamper", untamperedFrom.Id, untamperedBy);
         else
         {
@@ -275,11 +280,11 @@ public sealed class Workspace : IWriteSink, IDisposable
         if (filePath != null && module.PdbState == null)
             try { module.LoadPdb(); } catch (Exception) { } // a broken PDB costs the symbols, not the module
         module.EnableTypeDefFindCache = true;
-        var lm = new LoadedModule { Id = _modules.Count + 1, Module = module, Path = displayPath, OriginalBytes = bytes, FileBytes = fileBytes, Repair = repair, Ws = this };
-        _modules.Add(lm);
+        var lm = new LoadedModule { Id = ++_nextId, Module = module, Path = displayPath, OriginalBytes = bytes, FileBytes = fileBytes, Repair = repair, Ws = this };
+        _modules = [.. _modules, lm];
         if (RefPaths.UsesNetFramework(module)) EnsureFrameworkPaths();
         if (module.Assembly != null) Resolver.AddToCache(module);
-        if (_modules.Count == 1) CurrentModuleId = lm.Id;
+        if (_modules.Length == 1) CurrentModuleId = lm.Id;
         Revision++;
         return lm;
     }
@@ -524,7 +529,7 @@ public sealed class Workspace : IWriteSink, IDisposable
     public void Dispose()
     {
         foreach (var m in _modules) m.Module.Dispose();
-        _modules.Clear();
+        _modules = [];
     }
 }
 
