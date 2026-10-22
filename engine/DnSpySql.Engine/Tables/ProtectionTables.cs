@@ -136,12 +136,12 @@ public static class ProtectionTables
             .Col("plaintext", SqlType.Any, d => d.Plain.Value.Value,
                 doc: "what the call returns, computed by interpreting the decryptor's IL (the sample is never run); NULL when it cannot be")
             .Text("emulation", d => d.Plain.Value.Status, doc: "ok, or why the decryptor could not be interpreted")
+            .Bool("is_library", d => TriageTables.IsLibrary(d.Decryptor), doc: "the decryptor belongs to a well-known library namespace")
             .Text("plaintext_kind", d => TriageTables.ValueKind(d.Plain.Value.Value),
                 doc: "text | base64 text | ciphertext (base64 of bytes that are not text: a second layer, decrypted by another method) | binary")
             .Text("args_from", d => d.Args.Any(a => a.FromField) ? "field" : "literal",
                 doc: "literal, or field: an argument is a static field's value (a literal it holds, a decoder's result from decoded_fields, " +
                      "or what a decryptor computed into it)")
-            .Bool("is_library", d => TriageTables.IsLibrary(d.Decryptor), doc: "the decryptor belongs to a well-known library namespace")
             .Arg("min_sites", SqlType.Integer, _ => null, required: false, doc: "minimum call sites of a decryptor (default 5)")
             .Estimate(500, 50));
     }
@@ -289,9 +289,12 @@ public static class ProtectionTables
                 $"{virt.Stubs.Count} of {bodied} methods forward their arguments to {virt.Dispatcher.FullName} with an id: their code runs in an IL " +
                 "virtual machine, and decompile() shows only the forwarding" + (virt.HandlerLoop ? " (it dispatches through a switch of 50 or more handlers in a loop)" : ""),
                 m.H(virt.Dispatcher)));
-        // a metadata shell: types and maybe resources, but no method body; the code is somewhere else (an encrypted
-        // section, a carried assembly)
-        if (bodies.Count == 0 && (md.Resources.Count > 0 || md.ManagedEntryPoint != null || HighEntropySection(m).Name != null))
+        // a metadata shell: methods (or an entry point) but no method body; the code is somewhere else (an encrypted
+        // section, a carried assembly). A satellite or resource-only assembly declares no method at all, and a culture.
+        if (bodies.Count == 0 && string.IsNullOrEmpty(md.Assembly?.Culture?.String)
+            && (md.Metadata.TablesStream.MethodTable.Rows > 0 && md.GetTypes().SelectMany(t => t.Methods).Any(x => !x.IsAbstract && x.ImplMap == null && !x.IsRuntime)
+                || md.ManagedEntryPoint != null)
+            && (md.Resources.Count > 0 || md.ManagedEntryPoint != null || HighEntropySection(m).Name != null))
         {
             var largest = Carve(m).Where(c => Workspace.NotDotNet(c.Slice()[..Math.Min(c.Slice().Length, 4096)].ToArray()) == null).MaxBy(c => c.Size);
             var section = HighEntropySection(m);
@@ -461,12 +464,23 @@ public static class ProtectionTables
         var info = new FileInfo(path);
         if (!info.Exists) throw new SqlException($"carve_file: no file {path}");
         if (info.Length > int.MaxValue) throw new SqlException($"carve_file: {path} is larger than 2 GB");
-        var file = File.ReadAllBytes(path);
+        byte[] file;
+        try { file = File.ReadAllBytes(path); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new SqlException($"carve_file: cannot read {path}: {e.Message}"); }
         long outer = Header(file, 0) is { } self ? self.Size : 0;
-        foreach (var (at, pe, parent) in PesIn(file, 0, (_, _) => true))
+        // as embedded_pes: a PE once (crafted bytes repeat one header over and over), and a bounded number of them
+        var seen = new HashSet<string>();
+        int rows = 0;
+        foreach (var (at, pe, parent) in PesIn(file, 0, (at, size) => rows < MaxCarvedRows && seen.Add(
+                     $"{size}:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(file.AsSpan(at, (int)Math.Min(size, Math.Min(4096, file.Length - at)))))}")))
+        {
+            rows++;
             yield return new FileCarve(path, at == 0 ? "the file" : outer > 0 && at >= outer ? "overlay" : outer > 0 ? "inside the file's image" : "file bytes",
                 at, pe.Size, pe.Machine, pe.Dll, parent, file);
+        }
     }
+
+    const int MaxCarvedRows = 4096;
 
     // A blob that is a PE, as it is or behind gzip/zlib/deflate (at the start or after a 4-byte length); else null.
     static Carved? PeIn(LoadedModule m, string where, byte[] data)
@@ -736,9 +750,9 @@ public static class ProtectionTables
     static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LoadedModule, Tuple<int, List<Virtualized>>> _vms = new();
 
     /// <summary>
-    /// Dispatchers that ten or more methods (or a fifth of them, and three at least) are stubs into: a body of at most 40
-    /// instructions whose one call into the module is to the dispatcher, after an object[] of the arguments and an integer
-    /// id or a type token. That is what IL virtualizers leave of a method; the shape names no product.
+    /// Dispatchers that many methods are stubs into: a body of at most 40 instructions whose one call into the module is
+    /// to the dispatcher (returning object), after an object[] of all its arguments and an integer id or a type token.
+    /// That is what IL virtualizers leave of a method; the shape names no product.
     /// </summary>
     internal static List<Virtualized> Virtualization(LoadedModule m)
     {
@@ -751,8 +765,9 @@ public static class ProtectionTables
             bodied++;
             if (Stub(meth, ins) is var (d, id)) (stubs.TryGetValue(d, out var list) ? list : stubs[d] = new())[meth] = id;
         }
-        var result = stubs.Where(kv => kv.Value.Count >= 10 || kv.Value.Count >= 3 && kv.Value.Count * 5 >= bodied)
-            .Select(kv => new Virtualized(kv.Key, kv.Value, HandlerLoop(kv.Key, 0))).ToList();
+        // with the VM's handler loop found, ten stubs (or a fifth of the methods, three at least); without it, twenty
+        var result = stubs.Select(kv => new Virtualized(kv.Key, kv.Value, HandlerLoop(kv.Key, 0)))
+            .Where(v => v.Stubs.Count >= 20 || v.HandlerLoop && (v.Stubs.Count >= 10 || v.Stubs.Count >= 3 && v.Stubs.Count * 5 >= bodied)).ToList();
         _vms.AddOrUpdate(m, Tuple.Create(m.Revision, result));
         return result;
     }
@@ -778,6 +793,11 @@ public static class ProtectionTables
             }
         }
         if (target == null || array < 0 || target.MethodSig?.Params.Any(p => p is SZArraySig { Next.ElementType: ElementType.Object }) != true) return null;
+        // the VM hands back the method's result (object), and the array carries every argument of the method: a logging
+        // helper taking an event id and some values does neither
+        if (target.MethodSig.RetType?.ElementType != ElementType.Object) return null;
+        var loaded = ins.Where(x => x.IsLdarg()).Select(x => x.GetParameterIndex()).ToHashSet();
+        if (Enumerable.Range(0, meth.Parameters.Count).Any(p => !loaded.Contains(p))) return null;
         // the id: the constant pushed before the array's length (ldc id; ldc n; newarr object)
         int? id = array >= 2 && ins[array - 1].IsLdcI4() && ins[array - 2].IsLdcI4() ? ins[array - 2].GetLdcI4Value() : null;
         return id != null || token ? (target, id) : null;
@@ -974,23 +994,28 @@ public static class ProtectionTables
             // usual way a settings field is decrypted in place), which the call sites read after or before: the literal
             // is what the decryptor is given
             Lit? literal = null;
-            bool other = false;
+            bool twoLiterals = false;
+            var unexplained = new List<MethodDef>(); // writers of something else: a parameter, a value computed elsewhere
             foreach (var w in fold.S.Index.To(lm.H(fd)).Where(x => x.Kind == "write"))
             {
-                if (!TryBody(w.From, out var ins) || w.Index >= ins.Count) { other = true; break; }
+                if (!TryBody(w.From, out var ins) || w.Index >= ins.Count) { unexplained.Add(w.From); continue; }
                 int k = w.Index - 1;
                 while (k >= 0 && ins[k].OpCode.Code == Code.Nop) k--;
                 if (k >= 0 && ins[k].OpCode.Code != Code.Ldsfld && Literal(ins[k], fold) is { } lit)
                 {
-                    if (literal != null) { other = true; break; }
+                    twoLiterals |= literal != null;
                     literal = lit;
                 }
-                else if (!ReadsItself(ins, k, fd)) { other = true; break; }
+                else if (!ReadsItself(ins, k, fd)) unexplained.Add(w.From);
             }
-            if (literal != null && !other) v = literal with { Text = $"{fd.Name} = {literal.Text}", FromField = true };
-            // else the value the field has once the program started: a decoder's (decoded_fields) or what a decryptor
-            // computed into it in the static constructor, so Decrypt2(Settings.Host) is a call with a known argument
-            else if (TriageTables.KnownValue(fold.S, fd) is { Value: { } known })
+            if (literal != null && !twoLiterals && unexplained.Count == 0) v = literal with { Text = $"{fd.Name} = {literal.Text}", FromField = true };
+            // else the value the field has once the program started, when nothing else writes it: what a decryptor
+            // computed into it in its static constructor, or what its decoder left (decoded_fields), so
+            // Decrypt2(Settings.Host) is a call with a known argument. A field the program reassigns (Key = parameter)
+            // has no one value.
+            else if (!twoLiterals && TriageTables.KnownValue(fold.S, fd) is { Value: { } known, Source: not "literal" } kv
+                     && unexplained.All(w => w.IsStaticConstructor && w.DeclaringType == fd.DeclaringType
+                                             || kv.Source == "decoded" && TriageTables.DecodedBy(fold.S, fd) == w))
                 v = new Lit($"{fd.Name} = {Shown(known)}", known, FromField: true);
         }
         return fold.Fields[fd] = v;

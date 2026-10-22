@@ -58,6 +58,13 @@ public sealed class EditTests : SampleTest
         Assert.Contains("read-only", live.Error("select stub_return(resolve('Sample.Dice::Before'), 1)"));
         Assert.Contains("can only be switched on", live.Error("select set_setting('read_only', 0)"));
         Assert.Equal(1, live.Long("select count(*) from methods where name = 'Before'"));
+        // nor can the journal, annotations or a saved copy change what the session holds or the files beside it
+        foreach (var write in new[] { "select undo()", "select redo()", $"select save({Cli.Sql(PathIn("x.dll"))})", "select set_comment(resolve('Sample.Dice::Before'), 'x')",
+                                      "select tag(resolve('Sample.Dice::Before'), 'x')", "select bp_set(resolve('Sample.Dice::Before'))" })
+            Assert.Contains("read-only", live.Error(write));
+        Assert.Equal(1, live.Long("select count(*) from methods where name = 'Before'"));
+        Assert.False(File.Exists(PathIn("x.dll")));
+        Assert.Equal(1, live.Long("select mutates from dnspysql_functions where name = 'undo'"));
     }
 
     [Fact]

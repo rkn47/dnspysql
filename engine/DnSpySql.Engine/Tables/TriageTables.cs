@@ -78,8 +78,8 @@ public static class TriageTables
                 "encrypted (a value handed to an API that is still ciphertext: its decoder could not be interpreted) | resource (text in a " +
                 "resource, or a .resources string)")
             .Text("resource", r => r.Resource, doc: "the resource (resource/element for a .resources entry) the indicator is in")
-            .Text("fields", r => r.Fields, doc: "the settings field(s) the value comes from (host:port names the host's field and the port's)")
             .Bool("is_library", r => r.Method != null && IsLibrary(r.Method), doc: "the method belongs to a well-known library namespace")
+            .Text("fields", r => r.Fields, doc: "the settings field(s) the value comes from (host:port names the host's field and the port's)")
             .Estimate(100, 50));
 
         s.Db.Register(new Table<Decoded>("decoded_fields",
@@ -223,7 +223,10 @@ public static class TriageTables
         return c;
     }
 
-    const int MaxDecoders = 20;
+    // decoders run per module whenever a known field value is asked for (decryptor_calls, protections, triage()): a few,
+    // each on a small budget, and no more once the module has used its time
+    const int MaxDecoders = 8;
+    static readonly TimeSpan DecodeTime = TimeSpan.FromSeconds(20);
 
     internal static List<Decoded> DecodedFields(Session s, LoadedModule m)
     {
@@ -243,6 +246,7 @@ public static class TriageTables
     static IEnumerable<Decoded> FindDecoded(Session s, LoadedModule m)
     {
         int decoders = 0;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         foreach (var t in m.Module.GetTypes())
         {
             if (t.FindStaticConstructor() is not { } cctor || !TryBody(cctor, out var ins)) continue;
@@ -265,7 +269,12 @@ public static class TriageTables
                 }
             foreach (var (decoder, stored) in writes.Where(w => w.Value.Count >= 2 && reads.GetValueOrDefault(w.Key)?.Count >= 2).OrderBy(w => w.Key.MDToken.Raw))
             {
-                if (++decoders > MaxDecoders) yield break;
+                if (++decoders > MaxDecoders || clock.Elapsed > DecodeTime)
+                {
+                    yield return new Decoded(m, null, t, null, null, decoder, 0,
+                        $"not run: this module's decoders used their budget ({MaxDecoders} decoders, {DecodeTime.TotalSeconds:N0} s)");
+                    yield break;
+                }
                 var run = Emulator.Decode(s, decoder, t);
                 foreach (var (f, before, after) in run.Changed)
                     yield return new Decoded(m, f, t, before, after, decoder, stored.GetValueOrDefault(f), run.Error);
@@ -298,8 +307,16 @@ public static class TriageTables
     }
 
     /// <summary>A static field's known value (FieldValues), for folding Decode(Settings.Host) to a call with that value; null while it is being worked out.</summary>
-    internal static (object? Value, string Source)? KnownValue(Session s, FieldDef fd) =>
-        _busy > 0 || s.Ws.Find(fd.Module) is not { } lm ? null : FieldValues(s, lm).TryGetValue(fd, out var v) && v.Value != null ? v : null;
+    internal static (object? Value, string Source)? KnownValue(Session s, FieldDef fd)
+    {
+        if (_busy > 0 || s.Ws.Find(fd.Module) is not { } lm) return null;
+        try { return FieldValues(s, lm).TryGetValue(fd, out var v) && v.Value != null ? v : null; }
+        catch (Exception e) when (e is not (OperationCanceledException or OutOfMemoryException)) { return null; } // a sample's code is not ours to fail on
+    }
+
+    /// <summary>The decoder that left the field's decoded value, if one did.</summary>
+    internal static MethodDef? DecodedBy(Session s, FieldDef fd) =>
+        _busy > 0 || s.Ws.Find(fd.Module) is not { } lm ? null : DecodedFields(s, lm).FirstOrDefault(d => d.Field == fd && d.Value != null)?.Decoder;
 
     /// <summary>
     /// What a value looks like: text | base64 text (base64 of readable text) | ciphertext (base64 of 16 or more bytes, a
@@ -314,6 +331,8 @@ public static class TriageTables
             case not string: return "text";
         }
         var s = (string)v;
+        // a hex digest or a GUID's digits are base64 characters too, and decode to noise: they are text
+        if (s.All(char.IsAsciiHexDigit)) return "text";
         if (s.Length >= 8 && s.Length % 4 == 0 && s.TrimEnd('=') is var core && s.Length - core.Length <= 2
             && core.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '+' or '/'))
         {
@@ -728,7 +747,13 @@ public static class TriageTables
             var host = fields.Select(kv => (kv.Key, kv.Value, Hosts: kv.Value.Value is string v ? Find(v).Where(h => h.Kind == "domain" && !h.Value.Contains(':')
                                                                                                        || h.Kind == "ip" && !h.Value.Contains(':')).Select(h => h.Value).Distinct().ToList() : []))
                 .FirstOrDefault(h => h.Hosts.Count > 0);
-            var port = fields.Select(kv => (kv.Key, kv.Value, Ports: Ports(kv.Value.Value))).FirstOrDefault(p => p.Ports.Count > 0);
+            // a string of port numbers ("8080,443"); else an integer field named as a port: a reconnect delay of 5000 or a
+            // bool (stored as 1) is a number too
+            var port = fields.Where(kv => kv.Value.Value is string).Select(kv => (kv.Key, kv.Value, Ports: Ports(kv.Value.Value))).FirstOrDefault(p => p.Ports.Count > 0);
+            if (port.Key == null)
+                port = fields.Where(kv => kv.Value.Value is long && kv.Key.FieldSig?.Type?.ElementType is not ElementType.Boolean
+                                          && kv.Key.Name.String.Contains("port", StringComparison.OrdinalIgnoreCase))
+                    .Select(kv => (kv.Key, kv.Value, Ports: Ports(kv.Value.Value))).FirstOrDefault(p => p.Ports.Count > 0);
             if (host.Key == null || port.Key == null) continue;
             var source = host.Value.Source == "decoded" || port.Value.Source == "decoded" ? "decoded" : host.Value.Source;
             foreach (var pair in host.Hosts.SelectMany(h => port.Ports.Select(p => $"{h}:{p}")).Take(MaxPairs))

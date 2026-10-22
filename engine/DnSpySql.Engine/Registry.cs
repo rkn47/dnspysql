@@ -41,6 +41,14 @@ public static class Registry
 
         foreach (var t in s.Db.Tables) t.Sink = s.Ws;
 
+        // A read-only session (--readonly, or set_setting('read_only', 1)) refuses what changes the model, replays the
+        // journal, records annotations or writes files beside the sample, not only the edits of the model: the annotation
+        // tables already refuse their INSERTs, and these are the same writes as functions. Decompiling, export_project and
+        // opening more modules stay allowed.
+        s.Db.MarkMutating("undo", "redo", "save", "save_raw", "save_project", "set_comment", "tag", "dnspy_sync", "bp_set", "bp_trace",
+            "bp_set_line", "bp_set_decompiled", "bp_toggle", "bp_enable", "bp_clear", "bp_module", "break_on_exception", "bp_export",
+            "bp_import", "export_dnspy_breakpoints", "import_dnspy_breakpoints");
+
         // Handle-valued filter columns accept bare tokens and '0x..' text (0 stays 0: "external" in call_edges/xrefs).
         s.Db.NormalizeHandle = v => v == 0 ? 0 : s.Ws.Normalize(v);
         foreach (var c in s.Db.Tables.SelectMany(t => t.Columns))

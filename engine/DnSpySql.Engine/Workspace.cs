@@ -417,19 +417,22 @@ public sealed class Workspace : IWriteSink, IDisposable
         var gone = _modules.Where(m => ids.Contains(m.Id)).ToList();
         if (gone.Count == 0) return;
         _modules = _modules.Where(m => !ids.Contains(m.Id)).ToArray();
-        foreach (var m in gone)
-        {
-            Resolver.Remove(m.Module);
-            m.Module.Dispose();
-        }
-        // and what their references loaded from disk (framework and side-by-side assemblies, each a whole module): the
-        // resolver loads one again when an open module asks for it
+        // the closed modules, and what their references loaded from disk (framework and side-by-side assemblies, each a
+        // whole module): the resolver loads one again when an open module asks for it
         var keep = _modules.SelectMany(m => m.BundleDeps.Append(m.Module.Assembly)).OfType<AssemblyDef>().ToHashSet();
-        foreach (var asm in Resolver.GetCachedAssemblies().Where(a => !keep.Contains(a)).ToList()) Resolver.Remove(asm);
+        Resolver.Forget(gone.Select(m => (ModuleDef)m.Module).ToList(), keep);
+        foreach (var m in gone) m.Module.Dispose();
+        // an open module with the same identity as a closed one (an untamper() copy, a second copy of a file) shared its
+        // cache entry: registered again
+        foreach (var m in _modules) if (m.Module.Assembly != null) Resolver.AddToCache(m.Module);
         _memo.Clear(); // references of the other modules resolved into these
-        foreach (var e in UndoStack.Concat(RedoStack))
-            if (e.ClosedModule == null && _groupModules.TryGetValue(e.Group, out var touched))
-                e.ClosedModule = touched.Where(ids.Contains).Select(id => (int?)id).FirstOrDefault();
+        // a group that changed one of them cannot be replayed, and its closures hold the module (whole ModuleDefs, for a
+        // whole-module edit): one light placeholder per group stays, so undo()/redo() can say what happened
+        var affected = new Dictionary<long, int>();
+        foreach (var (group, touched) in _groupModules)
+            if (touched.FirstOrDefault(ids.Contains) is var id and > 0) affected[group] = id;
+        Tombstone(UndoStack, affected);
+        Tombstone(RedoStack, affected);
         if (_modules.Length > 0 && !_modules.Any(m => m.Id == CurrentModuleId)) CurrentModuleId = _modules.Min(m => m.Id);
         Revision++;
         RefsVersion++; // what references resolved to may have been in them
@@ -497,6 +500,20 @@ public sealed class Workspace : IWriteSink, IDisposable
         return n;
     }
 
+    static readonly Action Nothing = () => { };
+
+    static void Tombstone(List<JournalEntry> stack, Dictionary<long, int> affected)
+    {
+        for (int i = stack.Count - 1; i >= 0; i--)
+        {
+            var e = stack[i];
+            if (!affected.TryGetValue(e.Group, out var id)) continue;
+            if (i + 1 < stack.Count && stack[i + 1].Group == e.Group) { stack.RemoveAt(i); continue; } // one per group
+            stack[i] = new JournalEntry { Seq = e.Seq, Group = e.Group, Table = e.Table, Description = e.Description, Time = e.Time,
+                                          Undo = Nothing, Redo = Nothing, ClosedModule = id };
+        }
+    }
+
     // A group that changed a module closed since is taken out of the history (it cannot be replayed): undo()/redo() stop
     // there, and when it is the first group they reach they say so; called again, they go on to the group before it.
     static bool Dropped(List<JournalEntry> stack, long group, string what, int done)
@@ -504,7 +521,7 @@ public sealed class Workspace : IWriteSink, IDisposable
         if (stack.LastOrDefault(e => e.Group == group && e.ClosedModule != null)?.ClosedModule is not int closed) return false;
         stack.RemoveAll(e => e.Group == group);
         if (done > 0) return true;
-        throw new SqlException($"{what}: the last change was to module {closed}, which close() removed; it is dropped from the {what} history, " +
+        throw new SqlException($"the last change was to module {closed}, which close() removed; it is dropped from the {what} history, " +
                                $"and {what}() again goes on to the change before it");
     }
 
@@ -631,10 +648,25 @@ public sealed class SafeAssemblyResolver : AssemblyResolver, IAssemblyResolver
     AssemblyDef? IAssemblyResolver.Resolve(IAssembly assembly, ModuleDef sourceModule) => Plain(assembly) ? base.Resolve(assembly, sourceModule) : null;
     public new AssemblyDef? Resolve(IAssembly assembly, ModuleDef sourceModule) => Plain(assembly) ? base.Resolve(assembly, sourceModule) : null;
 
-    // dnlib keeps each module's search paths in a dictionary keyed by the module, for the resolver's life: every module
-    // that ever resolved a reference stayed reachable, and close() freed almost nothing. The same cache, weakly keyed.
-    readonly System.Runtime.CompilerServices.ConditionalWeakTable<ModuleDef, IList<string>> _searchPaths = new();
-    protected override IEnumerable<string> GetModuleSearchPaths(ModuleDef module) => _searchPaths.GetValue(module, m => GetModulePrivateSearchPaths(m).ToList());
+    // For the resolver's life dnlib keeps each module's search paths, keyed by the module, and every assembly it loaded,
+    // under each name it was asked for (aliases too); its public Remove drops one name. Both caches are private.
+    static readonly System.Reflection.FieldInfo? SearchPaths =
+        typeof(AssemblyResolver).GetField("moduleSearchPaths", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+    static readonly System.Reflection.FieldInfo? Cached =
+        typeof(AssemblyResolver).GetField("cachedAssemblies", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+    /// <summary>Lets go of closed modules and of every cached assembly not in keep (close()); a dnlib that renames its caches gets the public calls.</summary>
+    internal void Forget(IReadOnlyCollection<ModuleDef> closed, IReadOnlySet<AssemblyDef> keep)
+    {
+        if (SearchPaths?.GetValue(this) is System.Collections.IDictionary paths) foreach (var m in closed) paths.Remove(m);
+        if (Cached?.GetValue(this) is System.Collections.IDictionary cached)
+        {
+            foreach (var key in cached.Keys.Cast<object>().ToList())
+                if (cached[key] is not AssemblyDef a || !keep.Contains(a)) cached.Remove(key);
+        }
+        else
+            foreach (var a in GetCachedAssemblies().Where(a => !keep.Contains(a)).ToList()) Remove(a);
+    }
 }
 
 // dnlib resolves a TypeRef or MemberRef by searching the target assembly each time; the decompiler asks for the

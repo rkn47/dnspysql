@@ -470,7 +470,10 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
   `pseudocode WHERE handle = ...`, `search WHERE query = ...`, `md_rows WHERE table_name = ...`. `il`, `locals`,
   `exception_handlers`, `blocks` and `cfg_edges` take a `method` filter but also scan every body.
 - **Undo.** Writes are journaled per statement: `undo(n)`, `redo(n)`, the `transactions` table; `--readonly`
-  refuses them. `set_setting('read_only', 1)` locks a running session the same way; it cannot be switched off again.
+  refuses them, and with them annotations, breakpoints, `undo()`/`redo()` and the `save` functions (decompiling and
+  `export_project()` stay allowed). `set_setting('read_only', 1)` locks a running session the same way; it cannot be
+  switched off again. `set_setting('max_modules', n)` refuses opening more than n modules at once (0, the default, is
+  no limit).
 - **Compatibility.** The names of earlier DnSpySql versions still work: `refs` and `attributes` are views, and older
   column names (`method_token`, `type_token`, `il_size`, ...) are extra columns. `params.seq` is now the ECMA
   sequence number (0 = return value); the 0-based argument position is `params.arg_index`.

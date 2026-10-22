@@ -66,6 +66,20 @@ public sealed class Database
         _functions[(name, nargs)] = (info, impl);
     }
 
+    /// <summary>Marks registered functions as writes (refused in a read-only session, shown as mutates in the catalog).</summary>
+    public void MarkMutating(params string[] names)
+    {
+        foreach (var key in _functions.Keys.Where(k => names.Contains(k.name, StringComparer.Ordinal)).ToList())
+        {
+            var (info, impl) = _functions[key];
+            var marked = new FunctionInfo { Name = info.Name, Args = info.Args, Signature = info.Signature, Doc = info.Doc, Mutates = true, Domain = info.Domain };
+            _functions[key] = (marked, impl);
+            if (Functions.IndexOf(info) is var i and >= 0) Functions[i] = marked;
+        }
+        if (names.FirstOrDefault(n => !_functions.Keys.Any(k => k.name == n)) is { } missing)
+            throw new InvalidOperationException($"MarkMutating: no function {missing}");
+    }
+
     public object? Invoke(string name, object?[] args)
     {
         if (!_functions.TryGetValue((name, args.Length), out var f) && !_functions.TryGetValue((name, -1), out f))

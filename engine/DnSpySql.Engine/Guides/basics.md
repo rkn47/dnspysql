@@ -22,7 +22,8 @@ tables and dnSpy's breakpoint configuration. Other guides: `SELECT topic, title 
 - Memory is only released by closing: work sample by sample, open → `triage()` → close. `SELECT close(id)` takes a
   module out with every module that came out of it (`modules.derived_from`: stages, the `untamper()` copy) when the
   statement ends; `close_all()` closes everything but the project file's module. A module with unsaved edits is
-  refused (save or undo first). Ids are never reused.
+  refused (save it first; undoing the edits still leaves it marked as edited). Ids are never reused. For bulk work start
+  the server with `--no-project`: otherwise the first module opened holds the project file and stays open.
 - The CLI runs one session per process: undo and unsaved edits end with it. Put a multi-step job in one process
   (several `-c`, or `-f script.sql`), or use the MCP or HTTP server.
 

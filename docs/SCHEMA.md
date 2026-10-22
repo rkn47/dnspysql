@@ -1653,9 +1653,9 @@ Every call of a string decryptor (string_decryptors, or the method given as decr
 | arg3 | ANY |  |  |
 | plaintext | ANY |  | what the call returns, computed by interpreting the decryptor's IL (the sample is never run); NULL when it cannot be |
 | emulation | TEXT |  | ok, or why the decryptor could not be interpreted |
+| is_library | INTEGER |  | the decryptor belongs to a well-known library namespace |
 | plaintext_kind | TEXT |  | text \| base64 text \| ciphertext (base64 of bytes that are not text: a second layer, decrypted by another method) \| binary |
 | args_from | TEXT |  | literal, or field: an argument is a static field's value (a literal it holds, a decoder's result from decoded_fields, or what a decryptor computed into it) |
-| is_library | INTEGER |  | the decryptor belongs to a well-known library namespace |
 | min_sites | INTEGER | `eq` *arg* | minimum call sites of a decryptor (default 5) |
 
 ### `text_iocs`
@@ -1731,8 +1731,8 @@ Indicators in string literals, in base64 literals that decode to text, in what t
 | offset | INTEGER |  | IL offset of the ldstr, or of the decryptor call |
 | source | TEXT |  | literal \| base64 (the literal decoded) \| decrypted (a decryptor's plaintext, interpreted) \| decoded (a settings field as its decoder leaves it, interpreted: decoded_fields) \| computed (a value handed to an API) \| encrypted (a value handed to an API that is still ciphertext: its decoder could not be interpreted) \| resource (text in a resource, or a .resources string) |
 | resource | TEXT |  | the resource (resource/element for a .resources entry) the indicator is in |
-| fields | TEXT |  | the settings field(s) the value comes from (host:port names the host's field and the port's) |
 | is_library | INTEGER |  | the method belongs to a well-known library namespace |
+| fields | TEXT |  | the settings field(s) the value comes from (host:port names the host's field and the port's) |
 
 ### `decoded_fields`
 
@@ -1838,18 +1838,18 @@ SELECT dll, entry, count(*) AS method_count, group_concat(method_name, '; ') AS 
 
 | signature | writes | description |
 |---|---|---|
-| `close(module [, with_derived])` |  | take a module out of the session when you are done with it, with every module that came out of it (modules.derived_from: untamper()'s copy, stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It happens when the statement ends, with a note of the memory freed; ids are never reused, so a handle of a closed module stays an error. Refused for a module with unsaved edits (save() or undo() first) and for the one holding the project file. Returns the ids closed, as a JSON array |
+| `close(module [, with_derived])` |  | take a module out of the session when you are done with it, with every module that came out of it (modules.derived_from: untamper()'s copy, stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It happens when the statement ends, with a note of the memory freed; ids are never reused, so a handle of a closed module stays an error. Refused for a module with unsaved edits (save() first: undoing them still leaves it marked as edited) and for the one holding the project file; a module edited later in the same statement stays open, with a note. Returns the ids closed, as a JSON array |
 | `close_all([keep_first])` |  | close() every module: all but the one holding the project file (all of them with --no-project), and with keep_first = 1 all but the first one open. For bulk work: open a batch, analyze it, close_all(), the next batch. Returns the ids closed |
 | `is_dirty([module])` |  | unsaved model edits or raw patches |
 | `open(path)` |  | load another assembly/module into the session; returns its module id |
 | `open_bundle_entry(path [, module])` | yes | load an assembly embedded in a single-file bundle as another module; returns its id |
 | `open_bytes(data [, name [, memory_layout [, parent]]])` |  | load a module from a blob, such as a payload decrypted or decompressed with SQL; it is only parsed, never run. The name defaults to memory-<sha256 prefix>.dll, unique per payload; bytes already open return that module, with a note. memory_layout = 1 for an image dumped from memory. modules.derived_from names the module it came out of: found for a PE that embedded_pes carves (or one in a module's file as it is); pass parent for a payload decoded by hand. Returns its module id (NULL for NULL data, and for a native PE, with a note) |
-| `redo([n])` |  | redo n undone statements |
-| `save([module,] path)` |  | write the (edited) module with dnlib, preserving tokens (dnSpy Save Module); also writes a PDB if one was loaded. With save_sidecars (default on) it also writes <file>.xml, the comments and tags as XML documentation that dnSpyEx shows as /// comments, and <file>.dnspysql.json with the annotations, and later dnSpy exports name the saved file |
-| `save_project([path])` |  | persist annotations (comments, bookmarks, tags, kv, breakpoints) |
-| `save_raw([module,] path)` |  | write the original file bytes plus raw byte patches (hex editor save); sidecar files as save() |
+| `redo([n])` | yes | redo n undone statements |
+| `save([module,] path)` | yes | write the (edited) module with dnlib, preserving tokens (dnSpy Save Module); also writes a PDB if one was loaded. With save_sidecars (default on) it also writes <file>.xml, the comments and tags as XML documentation that dnSpyEx shows as /// comments, and <file>.dnspysql.json with the annotations, and later dnSpy exports name the saved file |
+| `save_project([path])` | yes | persist annotations (comments, bookmarks, tags, kv, breakpoints) |
+| `save_raw([module,] path)` | yes | write the original file bytes plus raw byte patches (hex editor save); sidecar files as save() |
 | `set_setting(key, value)` |  | same as UPDATE runtime_settings |
-| `undo([n])` |  | undo the last n statements' writes |
+| `undo([n])` | yes | undo the last n statements' writes |
 | `untamper([module [, name [, initializer]]])` |  | decrypt the method bodies of an anti-tampered module by interpreting the routine that decrypts them at startup (found: a static method using Marshal.GetHINSTANCE and VirtualProtect; or the initializer given) over a copy of the image, and open the result as a new module; the sample never runs. Returns the new module's id |
 | `use_module(id)` |  | module used for bare tokens |
 
@@ -1889,8 +1889,8 @@ SELECT dll, entry, count(*) AS method_count, group_concat(method_name, '; ') AS 
 
 | signature | writes | description |
 |---|---|---|
-| `set_comment(handle, [il_offset,] text)` |  | replace the comment at an entity / IL offset (NULL or '' removes) |
-| `tag(handle, tag)` |  | attach a tag (progress tracking) |
+| `set_comment(handle, [il_offset,] text)` | yes | replace the comment at an entity / IL offset (NULL or '' removes) |
+| `tag(handle, tag)` | yes | attach a tag (progress tracking) |
 
 ### edit
 
@@ -1930,21 +1930,21 @@ SELECT dll, entry, count(*) AS method_count, group_concat(method_name, '; ') AS 
 
 | signature | writes | description |
 |---|---|---|
-| `bp_clear([label \| module])` |  | delete all breakpoints (or those with a label, or of a module) |
-| `bp_enable(on [, label])` |  | enable/disable all breakpoints (or those with a label); returns the count |
-| `bp_export(path [, module [, module_dir]])` |  | write breakpoints and bookmarks (of one module, or all), module breakpoints and exception settings in dnSpy's layout. An existing file such as dnSpy.xml is merged into: entries at the same location as ours are replaced, everything else (including breakpoints and bookmarks set in dnSpy) is kept; close dnSpy first. A new file can be imported in dnSpy's Breakpoints and Bookmarks windows. A bookmark's category becomes its dnSpy labels and its comment follows the name after ' — '. module_dir is the directory dnSpy opens the modules from. Returns the count |
-| `bp_import(path)` |  | read breakpoints and bookmarks (of loaded modules), module breakpoints and exception settings from dnSpy.xml or a dnSpy breakpoint/bookmark file |
-| `bp_module(module_name [, on_load])` |  | add a dnSpy module breakpoint: break when a matching module is loaded (on_load = 1, default), unloaded (0) or either (NULL); * and ? wildcards |
+| `bp_clear([label \| module])` | yes | delete all breakpoints (or those with a label, or of a module) |
+| `bp_enable(on [, label])` | yes | enable/disable all breakpoints (or those with a label); returns the count |
+| `bp_export(path [, module [, module_dir]])` | yes | write breakpoints and bookmarks (of one module, or all), module breakpoints and exception settings in dnSpy's layout. An existing file such as dnSpy.xml is merged into: entries at the same location as ours are replaced, everything else (including breakpoints and bookmarks set in dnSpy) is kept; close dnSpy first. A new file can be imported in dnSpy's Breakpoints and Bookmarks windows. A bookmark's category becomes its dnSpy labels and its comment follows the name after ' — '. module_dir is the directory dnSpy opens the modules from. Returns the count |
+| `bp_import(path)` | yes | read breakpoints and bookmarks (of loaded modules), module breakpoints and exception settings from dnSpy.xml or a dnSpy breakpoint/bookmark file |
+| `bp_module(module_name [, on_load])` | yes | add a dnSpy module breakpoint: break when a matching module is loaded (on_load = 1, default), unloaded (0) or either (NULL); * and ? wildcards |
 | `bp_patch([module])` | yes | write each enabled breakpoint of the module into its IL as `if (Debugger.IsAttached) Debugger.Break();` (any debugger stops there; save() to keep) and remove them from the table; returns the count. Conditions, hit counts, filters and tracepoints need a debugger, so they are refused |
-| `bp_set(method [, il_offset [, condition \| module]])` |  | set a breakpoint (default: first instruction); returns its id (existing id when one is already there) |
-| `bp_set_decompiled(handle, line_num [, condition])` |  | set a breakpoint on a line of the decompiled C# of handle (pseudocode_lines.line_num), like clicking in dnSpy's margin |
-| `bp_set_line(source_file, line [, condition])` |  | set a breakpoint on a source line (PDB sequence points; file name or path suffix) |
-| `bp_toggle(method [, il_offset])` |  | add the breakpoint if absent, remove it if present; returns 1 (set) or 0 (removed) |
-| `bp_trace(method, il_offset, message [, continue])` |  | set a tracepoint ($FUNCTION, $TID, {expr} ...) |
-| `break_on_exception(type_full_name [, first_chance = 1 [, second_chance]])` |  | configure dnSpy to break when the exception is thrown |
-| `dnspy_sync()` |  | merge breakpoints, bookmarks, module breakpoints and exception settings into dnSpy's settings file now (runtime setting dnspy_xml; this also happens after every statement that changes them). Run it after closing dnSpy, which overwrites the file on exit. Returns the number of entries |
-| `export_dnspy_breakpoints(dnspy_xml_path [, module_dir])` |  | write breakpoints, bookmarks, module breakpoints and exception settings into dnSpy's settings file (dnSpy.xml; merged keeping dnSpy's own entries, close dnSpy first). module_dir replaces the directory of module paths (where dnSpy will open the files). Returns the number of entries written |
-| `import_dnspy_breakpoints(dnspy_xml_path)` |  | read breakpoints and bookmarks (for loaded modules), module breakpoints and exception settings from dnSpy.xml |
+| `bp_set(method [, il_offset [, condition \| module]])` | yes | set a breakpoint (default: first instruction); returns its id (existing id when one is already there) |
+| `bp_set_decompiled(handle, line_num [, condition])` | yes | set a breakpoint on a line of the decompiled C# of handle (pseudocode_lines.line_num), like clicking in dnSpy's margin |
+| `bp_set_line(source_file, line [, condition])` | yes | set a breakpoint on a source line (PDB sequence points; file name or path suffix) |
+| `bp_toggle(method [, il_offset])` | yes | add the breakpoint if absent, remove it if present; returns 1 (set) or 0 (removed) |
+| `bp_trace(method, il_offset, message [, continue])` | yes | set a tracepoint ($FUNCTION, $TID, {expr} ...) |
+| `break_on_exception(type_full_name [, first_chance = 1 [, second_chance]])` | yes | configure dnSpy to break when the exception is thrown |
+| `dnspy_sync()` | yes | merge breakpoints, bookmarks, module breakpoints and exception settings into dnSpy's settings file now (runtime setting dnspy_xml; this also happens after every statement that changes them). Run it after closing dnSpy, which overwrites the file on exit. Returns the number of entries |
+| `export_dnspy_breakpoints(dnspy_xml_path [, module_dir])` | yes | write breakpoints, bookmarks, module breakpoints and exception settings into dnSpy's settings file (dnSpy.xml; merged keeping dnSpy's own entries, close dnSpy first). module_dir replaces the directory of module paths (where dnSpy will open the files). Returns the number of entries written |
+| `import_dnspy_breakpoints(dnspy_xml_path)` | yes | read breakpoints and bookmarks (for loaded modules), module breakpoints and exception settings from dnSpy.xml |
 
 ### data
 

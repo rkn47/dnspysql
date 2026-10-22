@@ -247,7 +247,8 @@ public static class DataFunctions
         };
         if (!c.ValidKeySize(key.Length * 8))
             throw new SqlException($"{algorithm}: a {key.Length}-byte key is not valid (sizes: {string.Join(", ", c.LegalKeySizes.Select(k => $"{k.MinSize / 8}..{k.MaxSize / 8}"))} bytes)");
-        c.Key = key;
+        try { c.Key = key; }
+        catch (CryptographicException e) { throw new SqlException($"{algorithm}: {e.Message}"); } // a known weak DES/3DES key
         int block = c.BlockSize / 8;
         if (cipherMode != CipherMode.ECB && (iv == null || iv.Length != block))
             throw new SqlException($"{algorithm} {cipherMode}: the iv must be {block} bytes");

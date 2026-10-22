@@ -131,6 +131,17 @@ public sealed class WorkflowTests : SampleTest
         Assert.Contains("module 2, which close() removed", live.Error("select undo()"));
         Assert.Equal(0, live.Long("select undo()"));
 
+        // an edit later in the same statement keeps the module open; close_all closes what it can and names the rest
+        var copy = PathIn("Copy.dll");
+        File.Copy(carrier, copy);
+        Assert.Equal(3, live.Long($"select open({Cli.Sql(copy)})"));
+        var same = live.Envelope("select close(3), set_body_stub(resolve('Sample.MemberCard::Checksum', NULL, 3), 0)");
+        Assert.Contains("module 3 not closed: edited in the same statement", Notice(same));
+        Assert.Equal(new object?[] { 1L, 3L }, live.Rows("select id from modules order by id").Select(r => r[0]).ToArray());
+        var all = live.Envelope("select close_all()");
+        Assert.Contains("module 3 left open: unsaved edits", Notice(all));
+        Assert.Equal(new object?[] { 3L }, live.Rows("select id from modules").Select(r => r[0]).ToArray());
+
         live.Q("select set_setting('max_modules', 1)");
         Assert.Contains("close() the ones you are done with", live.Error($"select open({Cli.Sql(PathIn("Stage.saved.dll"))})"));
     }

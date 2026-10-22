@@ -237,7 +237,7 @@ public static class EditFunctions
     // ldstr. Driven by the interpreter and the call shape only, so it is the same for every protector.
     static long InlineStrings(Session s, LoadedModule lm, long? decryptor, string mode)
     {
-        if (mode is not ("code" or "comment" or "both")) throw new SqlException($"inline_strings: mode '{mode}' is not code, comment or both");
+        if (mode is not ("code" or "comment" or "both")) throw new SqlException($"mode '{mode}' is not code, comment or both");
         var sites = new List<(MethodDef Caller, Instruction Call, int Args, string Text)>();
         int skipped = 0;
         // every plaintext first: the first edit starts the interpreter afresh

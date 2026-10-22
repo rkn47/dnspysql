@@ -73,6 +73,30 @@ public sealed class ConfigTests : SampleTest
     }
 
     [Fact]
+    public void Values_that_are_not_what_they_look_like_are_left_alone()
+    {
+        var r = Run(
+            // a field the program reassigns has no one value: its decryptor calls are not folded
+            "select add_type('public static class K { public static string Key = \"default\"; public static void Init(string s) { Key = s; } " +
+            "public static string Dec(string a) { return a + \"!\"; } } public static class UseK { public static string Go() { " +
+            "return K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key); } }')",
+            // a bool is a number, not a port; a string of digits beside the host is
+            "select add_type('public static class Cfg2 { public static string Host = \"c2.example\"; public static bool Install = true; " +
+            "public static string Port = \"4449\"; public static void Use() { System.Console.WriteLine(Host + Port + Install); } }')",
+            // a hex digest from a getter is a name, not ciphertext
+            "select add_type('public static class M { public static string Name = Get(); static string Get() { return \"9dd4e461268c8034f5c8564e155c67a6\"; } " +
+            "public static void Run() { new System.Threading.Mutex(false, Name); } }')",
+            "select count(*) from decryptor_calls where decryptor = resolve('K::Dec')",
+            "select value from iocs where kind = 'host:port'",
+            "select source from iocs where kind = 'mutex' and value = '9dd4e461268c8034f5c8564e155c67a6'",
+            "select try_decrypt(x'00000000000000000000000000000000', '3des', zeroblob(16))");
+        Assert.Equal(0, r.Long(3));
+        Assert.Equal(new[] { "c2.example:4449" }, r.Rows(4).Select(x => x.GetProperty("value").GetString()));
+        Assert.Equal("computed", r.Text(5));
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, r.Scalar(6).ValueKind); // a weak 3DES key: NULL, not an error
+    }
+
+    [Fact]
     public void A_decryptor_given_a_settings_field_is_interpreted_and_ciphertext_is_named()
     {
         // Cfg's static constructor decrypts a first layer (One, literal arguments) to base64 ciphertext; Two decrypts that,

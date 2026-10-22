@@ -175,7 +175,8 @@ public sealed class Emulator
     /// </summary>
     public static DecoderRun Decode(Session s, MethodDef decoder, TypeDef settings)
     {
-        var e = new Emulator(s, () => s.Db.Cancellation);
+        // a small budget: a settings constructor and its decoder are short, and every decoder of a module starts afresh
+        var e = new Emulator(s, () => s.Db.Cancellation) { MaxStaticSteps = 10_000_000 };
         lock (e._gate) return e.DecodeLocked(decoder, settings);
     }
 
@@ -200,7 +201,8 @@ public sealed class Emulator
         var changed = new List<(FieldDef, object?, object?)>();
         foreach (var f in fields)
             if (before.TryGetValue(f, out var b) && Value(f) is var a && !SameSql(a, b)) changed.Add((f, b, a));
-        if (error == null && changed.Count == 0 && _initFailed.TryGetValue(settings, out var why)) error = why;
+        // values decoded on top of a static constructor that stopped half way are said to be so
+        if (_initFailed.TryGetValue(settings, out var why)) error = error == null ? why : $"{error}; {why}";
         return new DecoderRun(changed, error);
     }
 
@@ -213,9 +215,14 @@ public sealed class Emulator
         lock (e._gate)
         {
             (e._steps, e._limit, e._at, e._scratchUsed) = (0, e.MaxStaticSteps, default, 0);
-            e.EnsureStaticInit(f.DeclaringType, 0);
-            var v = ToSql(e._statics.GetValueOrDefault(f));
-            return v != null ? (v, null) : (null, e._initFailed.GetValueOrDefault(f.DeclaringType) ?? e._skipped.GetValueOrDefault(f.DeclaringType));
+            try
+            {
+                e.EnsureStaticInit(f.DeclaringType, 0);
+                var v = ToSql(e._statics.GetValueOrDefault(f));
+                return v != null ? (v, null) : (null, e._initFailed.GetValueOrDefault(f.DeclaringType) ?? e._skipped.GetValueOrDefault(f.DeclaringType));
+            }
+            catch (Exception x) when (x is not (OperationCanceledException or OutOfMemoryException))
+            { return (null, $"emulator error {x.GetType().Name}: {x.Message}"); } // field_inits goes on to the next field
         }
     }
 

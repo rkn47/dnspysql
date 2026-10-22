@@ -99,7 +99,8 @@ public static class CoreFunctions
             "take a module out of the session when you are done with it, with every module that came out of it (modules.derived_from: " +
             "untamper()'s copy, stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It " +
             "happens when the statement ends, with a note of the memory freed; ids are never reused, so a handle of a closed module stays an " +
-            "error. Refused for a module with unsaved edits (save() or undo() first) and for the one holding the project file. Returns the " +
+            "error. Refused for a module with unsaved edits (save() first: undoing them still leaves it marked as edited) and for the one " +
+            "holding the project file; a module edited later in the same statement stays open, with a note. Returns the " +
             "ids closed, as a JSON array", "session");
         s.Fn("close_all", 0, 1, a => System.Text.Json.JsonSerializer.Serialize(s.CloseAll(Values.ToLong(a.Arg(0)) is 1)),
             "close_all([keep_first])",

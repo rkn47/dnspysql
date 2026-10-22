@@ -102,28 +102,35 @@ public sealed class Session : IDisposable
             for (int i = 0; withDerived && i < ids.Count; i++)
                 ids.AddRange(Ws.Modules.Where(m => m.DerivedFrom == ids[i] && !ids.Contains(m.Id)).Select(m => m.Id));
             foreach (var m in ids.Select(Ws.Get))
-            {
-                if (m.Dirty || m.RawPatches.Count > 0)
-                    throw new SqlException($"close: module {m.Id} ({m.Name}) has unsaved edits: save() it first, or undo() them" +
-                                           (m.Id == lm.Id ? "" : $" (it came out of module {lm.Id}; close({lm.Id}, 0) closes that one alone)"));
-                if (m.Id == _projectModule && Store.Path != null)
-                    throw new SqlException($"close: module {m.Id} holds the session's project file ({Store.Path}), where annotations are saved: " +
-                                           "close the other modules instead (close_all()), or start the session with --no-project");
-            }
+                if (Refusal(m) is { } why)
+                    throw new SqlException(why + (m.Id == lm.Id ? "" : $" (it came out of module {lm.Id}; close({lm.Id}, 0) closes that one alone)"));
             foreach (var id in ids) if (!_closing.Contains(id)) _closing.Add(id);
             return ids;
         }
     }
 
     /// <summary>close() would take it: no unsaved edits, and not the module holding the project file.</summary>
-    public bool Closable(LoadedModule m) => !m.Dirty && m.RawPatches.Count == 0 && !(m.Id == _projectModule && Store.Path != null);
+    public bool Closable(LoadedModule m) => Refusal(m) == null;
 
-    /// <summary>Every module that can be closed: all of them but the project file's (and, with keepFirst, the first one open).</summary>
+    // Why close() refuses a module (the host puts "close: " in front), or null. Undoing edits leaves a module marked as
+    // edited, so only a save() makes it closable again.
+    string? Refusal(LoadedModule m) =>
+        m.Dirty || m.RawPatches.Count > 0 ? $"module {m.Id} ({m.Name}) has unsaved edits: save() it first (undo() leaves it marked as edited)"
+        : m.Id == _projectModule && Store.Path != null ? $"module {m.Id} holds the session's project file ({Store.Path}), where annotations are " +
+                                                          "saved: close the other modules instead (close_all()), or start the session with --no-project"
+        : null;
+
+    /// <summary>Every module that can be closed: all of them but the project file's (and, with keepFirst, the first one open); the others are named in a note.</summary>
     public List<int> CloseAll(bool keepFirst)
     {
-        var keep = Ws.Modules.Where(m => m.Id == _projectModule && Store.Path != null || keepFirst && m == Ws.Modules[0]).Select(m => m.Id).ToHashSet();
         var ids = new List<int>();
-        foreach (var m in Ws.Modules.Where(m => !keep.Contains(m.Id))) ids.AddRange(Close(m, withDerived: false));
+        var skipped = new List<int>();
+        foreach (var m in Ws.Modules.Where(m => !(keepFirst && m == Ws.Modules[0])))
+        {
+            if (Closable(m)) ids.AddRange(Close(m, withDerived: false));
+            else if (!(m.Id == _projectModule && Store.Path != null)) skipped.Add(m.Id);
+        }
+        if (skipped.Count > 0) Notices.Add($"close_all: module{(skipped.Count > 1 ? "s" : "")} {string.Join(", ", skipped)} left open: unsaved edits (save() first)");
         return ids;
     }
 
@@ -151,7 +158,11 @@ public sealed class Session : IDisposable
     {
         var ids = _closing.ToList();
         _closing.Clear();
-        var closed = Ws.Modules.Where(m => ids.Contains(m.Id)).Select(m => m.Id).ToList();
+        // checked again: a later call in the same statement may have edited one since close() was asked for it
+        var kept = Ws.Modules.Where(m => ids.Contains(m.Id) && !Closable(m)).Select(m => m.Id).ToList();
+        if (kept.Count > 0)
+            Notices.Add($"close: module{(kept.Count > 1 ? "s" : "")} {string.Join(", ", kept)} not closed: edited in the same statement (save() first)");
+        var closed = Ws.Modules.Where(m => ids.Contains(m.Id) && !kept.Contains(m.Id)).Select(m => m.Id).ToList();
         if (closed.Count == 0) return closed;
         foreach (var m in Ws.Modules.Where(m => closed.Contains(m.Id))) ParkedModules.Add(DnSpySettings.ExportMarker(this, m));
         Ws.Close(closed);
