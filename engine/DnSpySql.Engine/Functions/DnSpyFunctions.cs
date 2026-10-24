@@ -59,10 +59,7 @@ public static class DnSpyFunctions
             var lm = ws.ModuleArg(a.Arg(2));
             var name = Str(a[0], "name");
             if (lm.Module.Resources.Any(r => r.Name == name)) throw new SqlException($"a resource named '{name}' already exists");
-            var er = new EmbeddedResource(name, Values.ToBytes(a[1]) ?? throw new SqlException("data cannot be NULL"), ManifestResourceAttributes.Public);
-            lm.Module.Resources.Add(er);
-            ws.Touch(lm);
-            ws.Record("resources", $"add_resource {name}", () => { lm.Module.Resources.Remove(er); ws.Touch(lm); }, () => { lm.Module.Resources.Add(er); ws.Touch(lm); });
+            ResourceTables.AddEmbedded(s, lm, name, Values.ToBytes(a[1]) ?? throw new SqlException("data cannot be NULL"), ManifestResourceAttributes.Public, $"add_resource {name}");
             return 1L;
         }, "add_resource(name, data [, module])", "add an embedded resource (data is a blob or text); same as INSERT INTO resources", "resources", mutates: true);
 
@@ -70,13 +67,8 @@ public static class DnSpyFunctions
         {
             var lm = ws.ModuleArg(a.Arg(2));
             var name = Str(a[0], "name");
-            int idx = lm.Module.Resources.ToList().FindIndex(r => r.Name == name);
-            if (idx < 0) throw new SqlException($"no resource named '{name}'");
-            var old = lm.Module.Resources[idx];
-            var er = new EmbeddedResource(old.Name, Values.ToBytes(a[1]) ?? throw new SqlException("data cannot be NULL"), old.Attributes);
-            lm.Module.Resources[idx] = er;
-            ws.Touch(lm);
-            ws.Record("resources", $"set_resource_data {name}", () => { lm.Module.Resources[idx] = old; ws.Touch(lm); }, () => { lm.Module.Resources[idx] = er; ws.Touch(lm); });
+            var old = lm.Module.Resources.FirstOrDefault(r => r.Name == name) ?? throw new SqlException($"no resource named '{name}'");
+            ResourceTables.ReplaceData(s, lm, old, Values.ToBytes(a[1]) ?? throw new SqlException("data cannot be NULL"), $"set_resource_data {name}");
             return 1L;
         }, "set_resource_data(name, data [, module])", "replace an embedded resource's bytes; same as UPDATE resources SET data", "resources", mutates: true);
 

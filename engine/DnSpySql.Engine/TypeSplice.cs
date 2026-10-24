@@ -489,7 +489,7 @@ sealed class TypeSplicer
     {
         null => null,
         Instruction i => Target(i, map),
-        IList<Instruction> sw => sw.Select(x => Target(x, map)!).ToList(),
+        IList<Instruction> sw => sw.Select(x => Target(x, map)!).ToArray(), // an array, as dnlib's reader makes it and every reader of a switch expects
         Local l => locals[l],
         Parameter p => dst.Parameters[p.Index],
         ITypeDefOrRef t => FixTypeDefOrRef(importer.Import(t)),

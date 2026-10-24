@@ -9,20 +9,22 @@ namespace DnSpySql.Functions;
 
 /// <summary>
 /// triage(): the first look at a sample in one call, as JSON: what it is, how it is protected, what it carries, what it
-/// does, its indicators and config candidates, and what to run next. The same findings as the triage tables (it reads
-/// their sources), capped so the answer stays readable; every entry names the method and offset to follow up with SQL.
+/// does, its config candidates, and what to run next. The same findings as the triage tables (it reads their sources),
+/// capped so the answer stays readable; every entry names the method and offset to follow up with SQL. It reads the
+/// file and its IL only: what interpreting code would add (decryptor_calls, decoded_fields) is in the next queries.
 /// </summary>
 public static class TriageFunctions
 {
-    const int MaxDecrypted = 200, MaxShown = 50, MaxIocs = 200, MaxInits = 100, MaxExamples = 3;
+    const int MaxShown = 50, MaxInits = 100, MaxExamples = 3;
 
     public static void Register(Session s)
     {
         s.Fn("triage", 0, 1, a => Triage(s, s.Ws.ModuleArg(a.Arg(0))).ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
             "triage([module])",
-            "the first look at a module as one JSON object: identity and anomalies, protections, embedded PEs, string decryptors and up to " +
-            $"{MaxDecrypted} decrypted call sites, capabilities by kind, indicators, config candidates (field_inits), resources, and the next " +
-            "queries to run. Library code is left out; each list says how many entries it had. Nothing runs: decryptors are interpreted",
+            "the first look at a module as one JSON object: identity and anomalies, protections, embedded PEs, string decryptors, " +
+            "capabilities by kind, config candidates (field_inits), settings decoders, resources, and the next queries to run. Library " +
+            "code is left out; each list says how many entries it had. Static: nothing is interpreted, the next queries say where that helps " +
+            "(decryptor_calls, decoded_fields)",
             "triage");
     }
 
@@ -95,32 +97,10 @@ public static class TriageFunctions
             ["method"] = m.H(d.Method), ["name"] = d.Method.FullName, ["call_sites"] = d.Sites, ["constant_sites"] = d.ConstantSites, ["score"] = d.Score,
         }));
 
-        // Interpreting every call can take a while on a large sample: the first MaxDecrypted sites, in IL order.
-        var calls = ProtectionTables.Calls(s, m, null, 5).Where(c => !TriageTables.IsLibrary(c.Decryptor)).ToList();
-        int ok = 0, ciphertext = 0;
-        var failures = new Dictionary<string, int>();
-        var plain = new JsonArray();
-        foreach (var c in calls.Take(MaxDecrypted))
-        {
-            var (value, status) = c.Plain.Value;
-            if (status != "ok") { failures[status] = failures.GetValueOrDefault(status) + 1; continue; }
-            ok++;
-            if (TriageTables.ValueKind(value) == "ciphertext") ciphertext++;
-            if (plain.Count < MaxShown)
-                plain.Add(new JsonObject { ["caller"] = c.Site.From.FullName, ["offset"] = c.Site.Offset, ["plaintext"] = Value(value) });
-        }
-        o["decrypted"] = new JsonObject
-        {
-            ["call_sites"] = calls.Count, ["interpreted"] = Math.Min(calls.Count, MaxDecrypted), ["ok"] = ok,
-            ["failures"] = new JsonObject(failures.OrderByDescending(kv => kv.Value).Take(5).Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
-            ["plaintexts"] = plain,
-        };
-        if (calls.Count > MaxDecrypted) next.Add($"SELECT caller_name, offset, plaintext FROM decryptor_calls WHERE module = {m.Id}  -- all {calls.Count} call sites");
-        if (failures.Count > 0) next.Add($"SELECT emulation, count(*) FROM decryptor_calls WHERE module = {m.Id} GROUP BY 1  -- why some decryptor calls were not interpreted");
-        // most plaintexts still base64 ciphertext: the first layer only, and another method decrypts them in turn
-        if (ok > 0 && ciphertext * 2 >= ok)
-            next.Add($"SELECT caller_name, offset, plaintext FROM decryptor_calls WHERE module = {m.Id} AND plaintext_kind = 'ciphertext'  -- a second " +
-                     "layer: find the method that decodes these (decoded_fields, or decryptor_calls with args_from = 'field')");
+        // what the decryptors return is interpreted on request, not here: on a large sample that takes a while
+        if (decryptors.Count > 0)
+            next.Add($"SELECT caller_name, offset, plaintext, plaintext_kind, emulation FROM decryptor_calls WHERE module = {m.Id}  -- the strings " +
+                     $"the {decryptors.Count} decryptor(s) return at each call site, interpreted (never run); plaintext_kind = 'ciphertext' is a second layer");
 
         var caps = TriageTables.Capabilities(s, m).Where(c => !TriageTables.IsLibrary(c.Site.From)).ToList();
         o["capabilities"] = Array(caps.GroupBy(c => c.Kind).OrderByDescending(g => g.Count()).Select(g => (JsonNode?)new JsonObject
@@ -132,13 +112,6 @@ public static class TriageFunctions
             })),
         }));
 
-        var iocs = TriageTables.Iocs(s, m).Where(i => i.Method == null || !TriageTables.IsLibrary(i.Method)).DistinctBy(i => (i.Kind, i.Value)).ToList();
-        o["iocs"] = Counted(iocs.Count, iocs.Take(MaxIocs).Select(i => (JsonNode?)new JsonObject
-        {
-            ["kind"] = i.Kind, ["value"] = i.Value, ["source"] = i.Source,
-            ["method_name"] = i.Method?.FullName, ["offset"] = i.Method == null ? null : (long?)i.Offset, ["resource"] = i.Resource,
-        }));
-
         // Config candidates: what constructors store, grouped by type, the types with the most values first.
         var inits = TriageTables.Inits(s, m).Where(f => !IsDefault(f.Value) && f.Field.DeclaringType != null && !TriageTables.IsLibrary(f.SetIn)).ToList();
         var byType = inits.GroupBy(f => f.Field.DeclaringType!.FullName).OrderByDescending(g => g.Count()).ToList();
@@ -146,17 +119,16 @@ public static class TriageFunctions
         {
             ["type"] = f.Field.DeclaringType!.FullName, ["field"] = f.Field.Name.String, ["kind"] = f.Kind, ["value"] = Value(f.Value), ["source"] = f.Source,
         }));
-        // settings decoded at startup (decoded_fields): what the program uses, where config_candidates has the ciphertext
-        var decoded = TriageTables.DecodedFields(s, m);
-        o["decoded_fields"] = Counted(decoded.Count(d => d.Field != null), decoded.Where(d => d.Field != null).Take(MaxInits).Select(d => (JsonNode?)new JsonObject
+        // settings types a decoder rewrites at startup (found from the IL): config_candidates has their ciphertext, and
+        // decoded_fields what the program uses, interpreted on request
+        var decoders = TriageTables.Decoders(s, m).ToList();
+        o["settings_decoders"] = Counted(decoders.Count, decoders.Take(MaxShown).Select(d => (JsonNode?)new JsonObject
         {
-            ["type"] = d.Settings.FullName, ["field"] = d.Field!.Name.String, ["value"] = Value(d.Value), ["value_kind"] = TriageTables.ValueKind(d.Value),
-            ["decoded_by"] = d.Decoder.FullName,
+            ["type"] = d.Settings.FullName, ["decoder"] = m.H(d.Decoder), ["decoder_name"] = d.Decoder.FullName, ["fields_written"] = d.Stored.Count,
         }));
-        if (decoded.Any(d => d.Field != null))
-            next.Add($"SELECT field_name, value, value_kind FROM decoded_fields WHERE module = {m.Id} AND field IS NOT NULL  -- the settings as the program decodes them at startup");
-        if (decoded.Any(d => d.Error != null))
-            next.Add($"SELECT decoder_name, error FROM decoded_fields WHERE module = {m.Id} AND error IS NOT NULL  -- a settings decoder that could not be interpreted to the end");
+        if (decoders.Count > 0)
+            next.Add($"SELECT field_name, value, value_kind, error FROM decoded_fields WHERE module = {m.Id}  -- the settings as the " +
+                     $"{decoders.Count} decoder(s) leave them at startup, interpreted (never run)");
         // by handle: a name can be in several open modules (an untamper() copy has all of them), and obfuscated ones are unreadable;
         // a store into a generic type's field names it as a TypeSpec (Gen`1<!0>), which decompile() refuses: its definition
         if (byType.Select(g => TypeDefOf(g.First().Field)).FirstOrDefault(t => t?.Module == md) is { } top)
@@ -165,8 +137,10 @@ public static class TriageFunctions
         var resources = md.Resources.OfType<EmbeddedResource>().ToList();
         o["resources"] = Counted(resources.Count, resources.Take(MaxShown).Select(r =>
         {
-            var head = r.CreateReader().ReadBytes((int)Math.Min(64 * 1024, r.Length));
-            return (JsonNode?)new JsonObject { ["name"] = r.Name.String, ["size"] = (long)r.Length, ["content_type"] = ResourceTables.Content(head) };
+            byte[]? head;
+            try { head = r.CreateReader().ReadBytes((int)Math.Min(64 * 1024, r.Length)); }
+            catch (Exception) { head = null; } // a resource whose data lies outside the file: listed, with no content type
+            return (JsonNode?)new JsonObject { ["name"] = r.Name.String, ["size"] = (long)r.Length, ["content_type"] = head == null ? "unreadable" : ResourceTables.Content(head) };
         }));
         // every next item is a statement that runs as written; the advice goes in its comment. A compressed resource that
         // embedded_pes already inflated to a PE (Costura's DLLs) is decoded: the open_bytes() item above covers it.

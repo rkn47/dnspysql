@@ -50,6 +50,40 @@ public static class AnnotationTables
 
     public static Action<T, object?> Set<T>(Session s, Action<T, object?> set) => (r, v) => { set(r, v); s.Store.Changed(); };
 
+    /// <summary>
+    /// Replaces the comments at each location with the text given (null or "" only removes them), journaled as one undo
+    /// step. Returns the number of comments added.
+    /// </summary>
+    public static int ReplaceComments(Session s, string description, IEnumerable<(AnnLocation At, string? Text)> items)
+    {
+        var added = new List<CommentRec>();
+        var replaced = new List<CommentRec>();
+        foreach (var (at, text) in items)
+        {
+            replaced.AddRange(s.Store.Comments.Where(c => c.At.Same(at)));
+            s.Store.Comments.RemoveAll(c => c.At.Same(at));
+            if (string.IsNullOrEmpty(text)) continue;
+            var rec = new CommentRec { Id = s.Store.NewId(), At = at, Text = text };
+            s.Store.Comments.Add(rec);
+            added.Add(rec);
+        }
+        s.Store.Changed();
+        s.Ws.Record("comments", description,
+            () => { foreach (var c in added) s.Store.Comments.Remove(c); s.Store.Comments.AddRange(replaced); s.Store.Changed(); },
+            () => { foreach (var c in replaced) s.Store.Comments.Remove(c); s.Store.Comments.AddRange(added); s.Store.Changed(); });
+        return added.Count;
+    }
+
+    /// <summary>Tags an entity once (a tag already there is kept), journaled. Returns the tag's record.</summary>
+    public static TagRec AddTag(Session s, AnnLocation at, string tag, string comment = "")
+    {
+        if (s.Store.Tags.FirstOrDefault(x => x.Tag == tag && x.At.SameEntity(at)) is { } existing) return existing;
+        var rec = new TagRec { Id = s.Store.NewId(), At = at, Tag = tag, Comment = comment };
+        s.Store.Tags.Add(rec); s.Store.Changed();
+        ListUndo(s, "tags", s.Store.Tags, rec, true);
+        return rec;
+    }
+
     public static void Register(Session s)
     {
         var db = s.Db;
@@ -110,13 +144,8 @@ public static class AnnotationTables
             .Text("name", x => NameOf(s, x.At));
         tags.OnInsert(v =>
         {
-            var at = Loc(s, v.GetValueOrDefault("handle"), null);
-            var tag = Str(v.GetValueOrDefault("tag"), "tag");
-            var existing = st().Tags.FirstOrDefault(x => x.Tag == tag && x.At.Mvid == at.Mvid && x.At.Token == at.Token);
-            if (existing != null) return (existing.Id, null, null);
-            var rec = new TagRec { Id = st().NewId(), At = at, Tag = tag, Comment = Values.ToText(v.GetValueOrDefault("comment")) ?? "" };
-            st().Tags.Add(rec); st().Changed();
-            ListUndo(s, "tags", st().Tags, rec, true);
+            var rec = AddTag(s, Loc(s, v.GetValueOrDefault("handle"), null), Str(v.GetValueOrDefault("tag"), "tag"),
+                Values.ToText(v.GetValueOrDefault("comment")) ?? "");
             return (rec.Id, null, null);
         }).OnDelete(x => { st().Tags.Remove(x); st().Changed(); ListUndo(s, "tags", st().Tags, x, false); return (null, null); });
         db.Register(tags);

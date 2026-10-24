@@ -45,22 +45,34 @@ public static class Bundle
         }
     }
 
-    static readonly System.Text.RegularExpressions.Regex DllName = new(@"[\x20-\x7e]{1,255}?\.dll(?=\x00)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-    static readonly System.Text.RegularExpressions.Regex SystemDll = new(@"(?i)^(api-ms-|ext-ms-|kernel32|user32|advapi32|shell32|ole32|oleaut32|ntdll|hostfxr|hostpolicy|coreclr|clrjit|msvc|vcruntime|ucrtbase|bcrypt|crypt32|ws2_32|version|shlwapi|gdi32|comctl32|mscoree)",
-        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    // The app host's embedded app path (apphost's `static char embed[EMBED_MAX]`): 1024 bytes of UTF-8 path and a NUL. The
+    // SDK's template holds this placeholder, the SHA-256 of "foobar" in hex; HostWriter overwrites it with the app's .dll
+    // path and zero padding, which leaves the rest of the buffer zero. A name in the import table is never padded like that.
+    const int EmbedSize = 1025;
+    static readonly byte[] EmbedPlaceholder = "c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2"u8.ToArray();
 
     /// <summary>
     /// For the app host of a framework-dependent app (the bundle signature with no manifest: nothing appended), the
-    /// assembly it starts, which the SDK writes into the host near the signature; "" when the name is not found; null
-    /// when the file is no app host.
+    /// assembly it starts, from the path the SDK writes into the host next to the signature; "" when the host was never
+    /// bound to an app (the SDK's template) or the path is not found; null when the file is no app host.
     /// </summary>
     public static string? AppHostTarget(byte[] b)
     {
         int at = b.AsSpan().IndexOf(Signature);
         if (at < 8 || BitConverter.ToInt64(b, at - 8) != 0 || Read("", b) != null) return null;
-        int from = Math.Max(0, at - 4096), len = Math.Min(b.Length, at + 4096) - from;
-        var window = Encoding.Latin1.GetString(b, from, len);
-        return DllName.Matches(window).Select(m => m.Value).FirstOrDefault(n => !SystemDll.IsMatch(n.Split('\\', '/')[^1])) ?? "";
+        int from = Math.Max(0, at - 4096), to = Math.Min(b.Length, at + 4096);
+        var window = b.AsSpan(from, to - from);
+        if (window.IndexOf(EmbedPlaceholder) >= 0) return "";
+        for (int i = 0, k; (k = window[i..].IndexOf(".dll\0"u8)) >= 0; i += k + 1)
+        {
+            // the path's start: back over its bytes to the zero before it, no further than the buffer allows
+            int nul = from + i + k + 4, start = nul;
+            while (start > 0 && b[start - 1] != 0 && nul - start < EmbedSize - 1) start--;
+            int end = start + EmbedSize;
+            if (end <= b.Length && !b.AsSpan(nul, end - nul).ContainsAnyExcept((byte)0))
+                return Encoding.UTF8.GetString(b, start, nul - start);
+        }
+        return "";
     }
 
     static BundleInfo? ReadAt(string hostPath, byte[] b, int sig)

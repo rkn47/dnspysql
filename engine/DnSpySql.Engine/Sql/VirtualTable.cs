@@ -241,6 +241,14 @@ public class Table<T> : VirtualTable
     public Table<T> Int(string name, Func<T, object?> get, Action<T, object?>? set = null, Pushdown pushdown = Pushdown.None, bool required = false, string? doc = null)
         => Col(name, SqlType.Integer, get, set, pushdown, false, required, doc);
 
+    /// <summary>An entity-handle column with an equality filter: bare tokens and '0x..' text are normalized (see IsHandle).</summary>
+    public Table<T> Handle(string name, Func<T, object?> get, bool required = false, string? doc = null)
+    {
+        Col(name, SqlType.Integer, get, null, Pushdown.Eq, false, required, doc);
+        Columns[^1].IsHandle = true;
+        return this;
+    }
+
     public Table<T> Text(string name, Func<T, object?> get, Action<T, object?>? set = null, Pushdown pushdown = Pushdown.None, bool required = false, string? doc = null)
         => Col(name, SqlType.Text, get, set, pushdown, false, required, doc);
 

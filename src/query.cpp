@@ -283,9 +283,13 @@ std::vector<StatementOutput> Runner::run(const std::string& script, const RunOpt
         r.sql = statements[i];
         const auto started = std::chrono::steady_clock::now();
         interrupted_ = false;
+        // the front end's cap (--max-rows, the MCP/HTTP request) and the max_rows setting: the smaller one wins
+        size_t max_rows = opts.max_rows;
         try {
-            const int64_t timeout = engine_.begin_statement();
-            deadline_ms_ = timeout > 0 ? now_ms() + timeout : 0;
+            const auto limits = engine_.begin_statement();
+            deadline_ms_ = limits.timeout_ms > 0 ? now_ms() + limits.timeout_ms : 0;
+            if (limits.max_rows > 0 && (max_rows == 0 || static_cast<size_t>(limits.max_rows) < max_rows))
+                max_rows = static_cast<size_t>(limits.max_rows);
         } catch (const std::exception& e) {
             r.success = false;
             r.error = e.what();
@@ -302,7 +306,7 @@ std::vector<StatementOutput> Runner::run(const std::string& script, const RunOpt
                 for (;;) {
                     auto step = st.step();
                     if (step == xsql::StepResult::row) {
-                        if (opts.max_rows && r.rows.size() >= opts.max_rows) {
+                        if (max_rows && r.rows.size() >= max_rows) {
                             r.truncated = true;
                             break;
                         }

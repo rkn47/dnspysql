@@ -106,7 +106,11 @@ public sealed class TriageTests : SampleTest
                  && c.GetProperty("value").GetString() == "City Library");
         Assert.DoesNotContain(config.GetProperty("items").EnumerateArray(), c => c.GetProperty("field").GetString() == "Motto"); // a default store
         Assert.Contains(t.GetProperty("next").EnumerateArray(), n => n.GetString()!.Contains("-- Sample.Defaults: the type with the most stored constants"));
-        Assert.Equal(0, t.GetProperty("decrypted").GetProperty("call_sites").GetInt32());
+        // static: no interpreted section, and nothing for the interpreting queries to do in this sample
+        Assert.False(t.TryGetProperty("decrypted", out _));
+        Assert.False(t.TryGetProperty("iocs", out _));
+        Assert.Equal(0, t.GetProperty("settings_decoders").GetProperty("total").GetInt32());
+        Assert.DoesNotContain(t.GetProperty("next").EnumerateArray(), n => n.GetString()!.Contains("decryptor_calls"));
         Assert.Equal(1, r.Long(2));
     }
 
@@ -209,14 +213,27 @@ public sealed class TriageTests : SampleTest
     }
 
     [Fact]
-    public void A_huge_literal_does_not_stall_iocs()
+    public void A_huge_literal_does_not_stall_triage()
     {
-        // "a.a.a...": every position a word boundary, the shape that made the e-mail pattern quadratic
+        // a 300 KB literal: capabilities, field_inits and string_args read every literal
         var huge = string.Concat(Enumerable.Repeat("a.", 150_000));
         using var live = new Live(Sample, "--no-project");
         live.Q($"select add_type('public static class Huge {{ public static string S = \"{huge}\"; }}')");
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        live.Q("select count(*) from iocs");
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"iocs took {sw.Elapsed}");
+        live.Q("select triage()");
+        live.Q("select count(string_args) from call_edges");
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"triage took {sw.Elapsed}");
+    }
+
+    [Fact]
+    public void With_emulation_off_nothing_is_interpreted()
+    {
+        using var live = new Live(Sample, "--no-project", "--no-emulation");
+        Assert.Equal("0", live.Scalar("select value from runtime_settings where key = 'emulation'"));
+        Assert.Contains("emulation is off", live.Error("select emulate(resolve('Sample.MemberCard::Checksum'), 'ab')"));
+        Assert.Contains("needs 1 or 0", live.Error("select set_setting('emulation', 'maybe')"));
+        live.Q("select set_setting('emulation', 'on')");
+        Assert.Equal("1", live.Scalar("select value from runtime_settings where key = 'emulation'"));
+        Assert.Equal(33L, live.Long("select emulate(resolve('Sample.MemberCard::Checksum'), 'ab')"));
     }
 }

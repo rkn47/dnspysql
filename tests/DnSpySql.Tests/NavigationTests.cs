@@ -66,4 +66,27 @@ public sealed class NavigationTests : SampleTest
         Assert.Equal(0, Run("select count(*) from callers where method = 0").Long());
         Assert.Equal(0, Run("select count(*) from callers where method = resolve('Sample.Square')").Long());
     }
+
+    [Fact]
+    public void Rings_of_interfaces_and_bases_end_the_walk()
+    {
+        // hostile metadata: IA : IB : IA, and B1 : B2 : B1 with no implementation of IC.M left on the ring. The interface
+        // walk once recursed until the stack overflowed (which takes the process down), the implementation walk never ended.
+        var r = Cli.Run(Sample,
+            "select add_type('namespace Ring { public interface IA { } public interface IB : IA { } public class C : IB { } " +
+            "public interface IC { void M(); } public class B1 : IC { public void M() { } } public class B2 : B1 { } }')",
+            "insert into interfaces(type, interface_name) values (resolve('Ring.IA'), 'Ring.IB')",
+            "update types set base_type_name = 'Ring.B2' where full_name = 'Ring.B1'",
+            "delete from methods where full_name = 'System.Void Ring.B1::M()'",
+            "select name from analyze where target = resolve('Ring.C') and relation = 'type.base_types' and kind = 'type' order by name",
+            "select count(*) from analyze where target = resolve('Ring.B2') and relation = 'type.base_types' and detail like 'base depth%'",
+            "select count(*) from analyze where target = resolve('Ring.IC::M') and relation = 'method.implemented_by'",
+            "select count(*) from callers where method = resolve('Ring.IC::M')");
+        Assert.True(r.Exit == 0, r.Error);
+        // result set 0 is add_type's; the INSERT, UPDATE and DELETE return none
+        Assert.Equal(["Ring.IA", "Ring.IB"], r.Rows(1).Select(x => x.GetProperty("name").GetString()!).ToArray());
+        Assert.Equal(1, r.Long(2)); // B1, then the ring closes
+        Assert.Equal(0, r.Long(3));
+        Assert.Equal(0, r.Long(4));
+    }
 }

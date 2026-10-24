@@ -160,7 +160,7 @@ public static class CoreFunctions
             "on exit. Returns the number of entries", "breakpoints");
         s.Fn("save_project", 0, 1, a => { s.Store.Save(Values.ToText(a.Arg(0))); return s.Store.Path; },
             "save_project([path])", "persist annotations (comments, bookmarks, tags, kv, breakpoints)", "session");
-        s.Fn("is_dirty", 0, 1, a => a.Length == 0 ? ws.Modules.Any(m => m.Dirty || m.RawPatches.Count > 0) : (object)(ws.ModuleArg(a[0]) is var m && (m.Dirty || m.RawPatches.Count > 0)),
+        s.Fn("is_dirty", 0, 1, a => a.Length == 0 ? ws.Modules.Any(m => m.HasUnsavedChanges) : (object)ws.ModuleArg(a[0]).HasUnsavedChanges,
             "is_dirty([module])", "unsaved model edits or raw patches", "session");
         s.Fn("undo", 0, 1, a => (long)ws.Undo((int)(Values.ToLong(a.Arg(0)) ?? 1)), "undo([n])", "undo the last n statements' writes", "session");
         s.Fn("redo", 0, 1, a => (long)ws.Redo((int)(Values.ToLong(a.Arg(0)) ?? 1)), "redo([n])", "redo n undone statements", "session");
@@ -222,19 +222,12 @@ public static class CoreFunctions
         s.Fn("set_comment", 2, 3, a =>
         {
             var (h, off, text) = a.Length == 2 ? (a[0], (object?)null, a[1]) : (a[0], a[1], a[2]);
-            var at = AnnotationTables.Loc(s, h, off);
-            s.Store.Comments.RemoveAll(c => c.At.Mvid == at.Mvid && c.At.Token == at.Token && c.At.Offset == at.Offset);
-            if (Values.ToText(text) is string t && t.Length > 0) s.Store.Comments.Add(new CommentRec { Id = s.Store.NewId(), At = at, Text = t });
-            s.Store.Changed();
+            AnnotationTables.ReplaceComments(s, "set_comment", [(AnnotationTables.Loc(s, h, off), Values.ToText(text))]);
             return 1L;
         }, "set_comment(handle, [il_offset,] text)", "replace the comment at an entity / IL offset (NULL or '' removes)", "annotations");
         s.Fn("tag", 2, 2, a =>
         {
-            var at = AnnotationTables.Loc(s, a[0], null);
-            var t = Str(a[1], "tag");
-            if (!s.Store.Tags.Any(x => x.Tag == t && x.At.Mvid == at.Mvid && x.At.Token == at.Token))
-                s.Store.Tags.Add(new TagRec { Id = s.Store.NewId(), At = at, Tag = t });
-            s.Store.Changed();
+            AnnotationTables.AddTag(s, AnnotationTables.Loc(s, a[0], null), Str(a[1], "tag"));
             return 1L;
         }, "tag(handle, tag)", "attach a tag (progress tracking)", "annotations");
     }

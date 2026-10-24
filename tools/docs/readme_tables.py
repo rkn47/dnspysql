@@ -11,7 +11,7 @@ import argparse, json, os, subprocess, sys
 
 # README section per catalog domain, in order. A new domain must be added here (the script stops otherwise).
 ORDER = [("meta", "Session and assembly"), ("metadata", "Metadata"), ("code", "Code"), ("xrefs", "Cross-references and call graph"),
-         ("triage", "Triage: protection, capabilities, indicators, configs"),
+         ("triage", "Triage: protection, capabilities, configs"),
          ("decompiler", "Decompiler"), ("search", "Search"), ("resources", "Resources"), ("pe", "PE file and raw metadata"),
          ("pdb", "Debug information (PDB)"), ("annotations", "Annotations"), ("breakpoints", "Breakpoints for dnSpy"),
          ("dnspy", "dnSpy's own state (dnSpy.xml)")]
@@ -50,10 +50,9 @@ SHORT = {
     "protections": "Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques (anti-tamper, IL virtualization, a code-less stub, ...), with evidence",
     "string_decryptors": "Methods shaped like a string decryptor, ranked by call sites with literal arguments",
     "decoded_fields": "Settings as the program decrypts them at startup: a settings class's fields after the method that decodes them in place (key from another field), interpreted",
-    "decryptor_calls": "Every call of a string decryptor with literal arguments (or settings fields of known value): what it decrypts, where to break, whether it is still ciphertext",
-    "field_inits": "Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also computed by a getter, decryptor or framework call",
+    "decryptor_calls": "Every call of a string decryptor with literal arguments (or settings fields of known value): what it decrypts (interpreted), where to break, whether it is still ciphertext",
+    "field_inits": "Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also through a getter",
     "capabilities": "What the code does, at the call or literal that shows it: injection, persistence, download and execute, keylogging, capture, credential theft and more",
-    "iocs": "URLs, webhooks, Telegram tokens, IPs, domains, host:port pairs, e-mails, wallets, registry keys and mutex names in literals, base64 literals, decrypted strings, decoded settings and text resources",
     "split_text": "A text cut at a `separator` (default ','), one row per piece: configs are often one delimited string",
     "dnspy_debugger_settings": "dnSpy's debugger options, including its anti-anti-debug protections; UPDATE value to set one",
     "dnspy_watch": "Expressions in dnSpy's Watch windows; INSERT adds one for the next debugging session",

@@ -165,6 +165,14 @@ public sealed class FrontEndTests : SampleTest
             Assert.Equal(0, remote.exit);
             Assert.Contains("IsValid", remote.stdout);
             Assert.Equal(1, Exec("--remote", url!, "--token", "s3cret", "-c", "SELECT * FROM nope").exit);
+            // the outcome comes in headers, whatever the format: a cell that reads like an error is only text, and the
+            // notices of a save reach the remote client's stderr as they would a local run's
+            Assert.Equal(0, Exec("--remote", url!, "--token", "s3cret", "-c", "SELECT 'error: only text' AS x, '\"success\":false' AS y").exit);
+            var failed = http.PostAsync("query?format=csv", new StringContent("SELECT * FROM nope")).Result;
+            Assert.Equal("false", failed.Headers.GetValues("X-DnSpySql-Success").Single());
+            var saved = Exec("--remote", url!, "--token", "s3cret", "--format", "csv", "-c", $"SELECT save({Cli.Sql(PathIn("remote-saved.dll"))})");
+            Assert.Equal(0, saved.exit);
+            Assert.Contains("note: ", saved.stderr);
 
             Assert.Contains("shutting_down", http.PostAsync("shutdown", null).Result.Content.ReadAsStringAsync().Result);
             Assert.True(server.WaitForExit(30_000));

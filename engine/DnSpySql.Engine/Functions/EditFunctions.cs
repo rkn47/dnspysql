@@ -282,26 +282,10 @@ public static class EditFunctions
 
     // The plaintext as a comment at each call (the comments table, which save() writes as XML documentation for dnSpy):
     // for code a rewrite would break, or when the code must stay as it is. One undoable step with the statement's edits.
-    static long Comment(Session s, LoadedModule lm, List<(MethodDef Caller, uint Offset, string Text)> sites)
-    {
-        var added = new List<CommentRec>();
-        var replaced = new List<CommentRec>();
-        foreach (var (caller, offset, text) in sites)
-        {
-            var at = AnnotationTables.Loc(s, lm.H(caller), (long)offset);
-            replaced.AddRange(s.Store.Comments.Where(c => c.At.Mvid == at.Mvid && c.At.Token == at.Token && c.At.Offset == at.Offset));
-            s.Store.Comments.RemoveAll(c => c.At.Mvid == at.Mvid && c.At.Token == at.Token && c.At.Offset == at.Offset);
-            var shown = text.Length > 500 ? text[..500] + "…" : text;
-            var rec = new CommentRec { Id = s.Store.NewId(), At = at, Text = $"decrypted: \"{Output.Visible(shown)}\"" };
-            s.Store.Comments.Add(rec);
-            added.Add(rec);
-        }
-        s.Store.Changed();
-        s.Ws.Record("comments", $"inline_strings: {added.Count} comment(s)",
-            () => { foreach (var c in added) s.Store.Comments.Remove(c); s.Store.Comments.AddRange(replaced); s.Store.Changed(); },
-            () => { foreach (var c in replaced) s.Store.Comments.Remove(c); s.Store.Comments.AddRange(added); s.Store.Changed(); });
-        return added.Count;
-    }
+    static long Comment(Session s, LoadedModule lm, List<(MethodDef Caller, uint Offset, string Text)> sites) =>
+        AnnotationTables.ReplaceComments(s, $"inline_strings: {sites.Count} comment(s)", sites.Select(x =>
+            (AnnotationTables.Loc(s, lm.H(x.Caller), (long)x.Offset),
+             (string?)$"decrypted: \"{Output.Visible(x.Text.Length > 500 ? x.Text[..500] + "…" : x.Text)}\"")).ToList());
 
     // a string where the code expects one: string, object, or a generic T the call site instantiates with string
     static bool ReturnsString(ProtectionTables.DecryptorCall c) => c.Decryptor.MethodSig?.RetType?.ElementType switch

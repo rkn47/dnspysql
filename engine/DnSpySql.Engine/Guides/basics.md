@@ -7,7 +7,9 @@ tables and dnSpy's breakpoint configuration. Other guides: `SELECT topic, title 
 ## Rules
 
 - Never execute the assembly or anything decoded from it. DnSpySql only parses; its IL interpreter (`emulate`,
-  `decryptor_calls`, `untamper`) computes results without running sample code. Never contact URLs or hosts found in a
+  `decryptor_calls.plaintext`, `decoded_fields`, `inline_strings`, `untamper`) computes results without running sample
+  code, and only those interpret anything: every other table and `triage()` read the file and its IL as they are. With
+  `set_setting('emulation', 0)` (or `--no-emulation`) nothing is interpreted. Never contact URLs or hosts found in a
   sample, and defang them in reports (`hxxps://evil[.]com`).
 - Work on a copy. Annotations are saved to `<first input>.dnspysql.json`; `save()` writes to the path you give, so
   never give the original's.
@@ -53,7 +55,7 @@ SELECT signature, mutates, description FROM dnspysql_functions WHERE name LIKE '
 
 - Tables computed from an argument need it and say so: `pseudocode`, `pseudocode_lines` and `pseudocode_refs`
   (`handle`), `analyze` (`target`), `search` (`query`), `md_rows` (`table_name`), `byte_search` (`pattern`),
-  `api_docs` (`member` or `doc_id`), `text_iocs` and `split_text` (`text`).
+  `api_docs` (`member` or `doc_id`), `split_text` (`text`).
 - `il`, `locals`, `exception_handlers`, `blocks` and `cfg_edges` read every body without `WHERE method = <handle>`.
 - Equality filters on `pushdown` columns are answered by the engine; other filters run after the scan. Add `LIMIT`
   while exploring.

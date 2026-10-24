@@ -66,6 +66,10 @@ public static class XrefTables
             .Text("dst_name", x => x.ToName)
             .Text("dst_assembly", x => x.Def?.Module?.Assembly?.Name.String ?? ExternalAssembly(x.Operand))
             .Bool("is_external", x => x.Def == null)
+            .Text("string_args", StringArgs,
+                doc: "the string literal passed to each string parameter of the callee, as a JSON array (null where the argument is not a " +
+                     "literal: a field, a call's result, a parameter); NULL when the callee takes no string. A mutex's or a registry key's " +
+                     "name, a URL. From the IL only: decryptor_calls and decoded_fields interpret what is computed")
             .Estimate(100_000));
 
         // A callvirt names the slot it calls through (Shape::Area, IShape::Area), so call_edges has no edge to an override
@@ -159,6 +163,40 @@ public static class XrefTables
             .Int("module", h => h.M.Id)
             .Int("offset", h => h.Offset, doc: "IL offset of the first hit inside the method (uses / used_by / read_by ...)")
             .Text("detail", h => h.Detail));
+    }
+
+    // call_edges.string_args: per string parameter of the callee, the ldstr that pushes its argument, found by walking
+    // back over the stack effects of the instructions before the call
+    static string? StringArgs(XRef x)
+    {
+        if (x.Kind is not ("call" or "callvirt" or "newobj") || x.Operand is not IMethod callee || callee.MethodSig?.Params is not { } ps
+            || !ps.Any(p => p?.ElementType == ElementType.String)) return null;
+        IList<Instruction> ins;
+        try { ins = x.From.Body.Instructions; } catch (Exception) { return null; }
+        if (x.Index >= ins.Count) return null;
+        var values = new List<string?>();
+        for (int k = 0; k < ps.Count; k++)
+            if (ps[k]?.ElementType == ElementType.String)
+                values.Add(ArgumentProducer(ins, x.Index, ps.Count - 1 - k) is int at && ins[at].OpCode.Code == Code.Ldstr ? ins[at].Operand as string : null);
+        return System.Text.Json.JsonSerializer.Serialize(values);
+    }
+
+    /// <summary>
+    /// The instruction that pushes a call's argument, counted from the last (0): walking back, each instruction's pushes
+    /// and pops say where the arguments' expressions start; a branch in between and the answer is not known.
+    /// </summary>
+    internal static int? ArgumentProducer(IList<Instruction> ins, int call, int fromLast)
+    {
+        int pos = 0;
+        for (int i = call - 1; i >= 0 && call - i <= 64; i--)
+        {
+            var x = ins[i];
+            if (x.OpCode.FlowControl is not (FlowControl.Next or FlowControl.Call)) return null;
+            x.CalculateStackUsage(false, out int push, out int pop);
+            if (pos == fromLast && push > 0) return i;
+            pos += push - pop;
+        }
+        return null;
     }
 
     static string? ExternalAssembly(object? operand) => operand switch
@@ -319,12 +357,11 @@ public static class Analyzer
                 {
                     var t = (TypeDef)item;
                     int depth = 0;
-                    for (var b = t.BaseType; b != null && depth < 64; depth++)
+                    foreach (var (b, bd) in TypeWalk.BaseChain(t))
                     {
-                        var bd = Try(() => b.ResolveTypeDef());
-                        yield return bd != null && ws.Find(bd.Module) != null ? Hit(s, rel, bd, null, $"base depth {depth + 1}")
-                            : new AnalyzerHit(rel, lm, null, b.FullName, null, $"base depth {depth + 1} (external)");
-                        b = bd?.BaseType;
+                        depth++;
+                        yield return bd != null && ws.Find(bd.Module) != null ? Hit(s, rel, bd, null, $"base depth {depth}")
+                            : new AnalyzerHit(rel, lm, null, b.FullName, null, $"base depth {depth} (external)");
                     }
                     foreach (var i in AllInterfaces(t))
                     {
@@ -526,36 +563,10 @@ public static class Analyzer
         return false;
     }
 
-    public static bool DerivesFrom(TypeDef t, TypeDef baseType)
-    {
-        if (baseType.IsInterface) return AllInterfaces(t).Any(i => Try(() => i.ResolveTypeDef()) == baseType);
-        int depth = 0;
-        for (var b = t.BaseType; b != null && depth < 64; depth++)
-        {
-            var bd = Try(() => b.ResolveTypeDef());
-            if (bd == null) return false;
-            if (bd == baseType) return true;
-            b = bd.BaseType;
-        }
-        return false;
-    }
+    public static bool DerivesFrom(TypeDef t, TypeDef baseType) =>
+        baseType.IsInterface ? AllInterfaces(t).Any(i => TypeWalk.Resolve(i) == baseType) : TypeWalk.Bases(t).Contains(baseType);
 
-    public static IEnumerable<ITypeDefOrRef> AllInterfaces(TypeDef t)
-    {
-        var seen = new HashSet<string>();
-        int depth = 0;
-        for (TypeDef? cur = t; cur != null && depth < 64; depth++)
-        {
-            foreach (var i in cur.Interfaces)
-                if (i.Interface != null && seen.Add(i.Interface.FullName))
-                {
-                    yield return i.Interface;
-                    if (Try(() => i.Interface.ResolveTypeDef()) is { } itd)
-                        foreach (var ii in AllInterfaces(itd)) if (seen.Add(ii.FullName)) yield return ii;
-                }
-            cur = Try(() => cur.BaseType?.ResolveTypeDef());
-        }
-    }
+    public static IEnumerable<ITypeDefOrRef> AllInterfaces(TypeDef t) => TypeWalk.Interfaces(t);
 
     // A method whose signature blob does not parse (obfuscators break them on purpose) has no MethodSig and matches nothing.
     static bool SameSig(MethodDef a, MethodDef b) =>
@@ -585,9 +596,8 @@ public static class Analyzer
     {
         foreach (var o in m.Overrides)
             if (Try(() => o.MethodDeclaration.ResolveMethodDef()) is { } d) yield return d;
-        if (!m.IsVirtual || m.IsNewSlot) yield break;
-        int depth = 0;
-        for (var b = Try(() => m.DeclaringType.BaseType?.ResolveTypeDef()); b != null && depth < 64; depth++)
+        if (!m.IsVirtual || m.IsNewSlot || m.DeclaringType is not { } declaring) yield break;
+        foreach (var b in TypeWalk.Bases(declaring))
         {
             var hit = b.Methods.FirstOrDefault(x => x.IsVirtual && x.Name == m.Name && SameSig(x, m));
             if (hit != null)
@@ -595,13 +605,12 @@ public static class Analyzer
                 yield return hit;
                 if (hit.IsNewSlot) yield break;
             }
-            b = Try(() => b.BaseType?.ResolveTypeDef());
         }
     }
 
     static MethodDef? FindImplementation(TypeDef t, MethodDef ifaceMethod)
     {
-        for (TypeDef? cur = t; cur != null; cur = Try(() => cur.BaseType?.ResolveTypeDef()))
+        foreach (var cur in TypeWalk.SelfAndBases(t))
         {
             var explicitImpl = cur.Methods.FirstOrDefault(x => x.Overrides.Any(o => Try(() => o.MethodDeclaration.ResolveMethodDef()) == ifaceMethod));
             if (explicitImpl != null) return explicitImpl;

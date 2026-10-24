@@ -266,8 +266,8 @@ public static class PeTables
         if (off < 0 || off + data.Length > m.DiskBytes.Length) throw new SqlException($"patch at 0x{off:X} (+{data.Length}) is outside the file (size 0x{m.DiskBytes.Length:X})");
         var before = new Dictionary<long, byte?>();
         for (int i = 0; i < data.Length; i++) before[off + i] = m.RawPatches.TryGetValue(off + i, out var b) ? b : null;
-        void Apply() { for (int i = 0; i < data.Length; i++) { if (m.DiskBytes[off + i] == data[i]) m.RawPatches.Remove(off + i); else m.RawPatches[off + i] = data[i]; } m.Revision++; }
-        void Revert() { foreach (var (k, b) in before) { if (b is byte x) m.RawPatches[k] = x; else m.RawPatches.Remove(k); } m.Revision++; }
+        void Apply() { for (int i = 0; i < data.Length; i++) { if (m.DiskBytes[off + i] == data[i]) m.RawPatches.Remove(off + i); else m.RawPatches[off + i] = data[i]; } m.Revision++; m.RawDirty = true; }
+        void Revert() { foreach (var (k, b) in before) { if (b is byte x) m.RawPatches[k] = x; else m.RawPatches.Remove(k); } m.Revision++; m.RawDirty = true; }
         Apply();
         s.Ws.NoteEdit(m);
         s.Ws.Record("file_bytes", $"patch {data.Length} byte(s) at 0x{off:X}", Revert, Apply);
@@ -459,16 +459,45 @@ public static class PeTables
                 }
     }
 
+    /// <summary>
+    /// The StringFileInfo strings of a VS_VERSIONINFO resource, "key=value; ..." in file order (a key a later language's
+    /// string table repeats keeps its first value; an empty value is left out). The resource is a tree of nodes: wLength,
+    /// wValueLength, wType, a NUL-terminated UTF-16 key, padding to 4 bytes, the value, padding, then the child nodes up
+    /// to wLength. VS_VERSION_INFO holds StringFileInfo, which holds one string table per language, which holds the strings.
+    /// </summary>
     static string VersionText(byte[] data)
     {
-        // Extract printable UTF-16 key/value strings from VS_VERSIONINFO.
-        var s = System.Text.Encoding.Unicode.GetString(data);
-        var parts = s.Split('\0', StringSplitOptions.RemoveEmptyEntries).Where(p => p.Length > 1 && p.All(ch => ch >= 0x20 && ch < 0xFFFE)).ToList();
-        var keys = new[] { "CompanyName", "FileDescription", "FileVersion", "InternalName", "LegalCopyright", "OriginalFilename", "ProductName", "ProductVersion", "Comments", "Assembly Version" };
-        var sb = new System.Text.StringBuilder();
-        for (int i = 0; i < parts.Count - 1; i++)
-            if (keys.Contains(parts[i])) sb.Append(parts[i]).Append('=').Append(parts[i + 1]).Append("; ");
-        return sb.ToString().TrimEnd(' ', ';');
+        var pairs = new List<string>();
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        Nodes(0, data.Length, 0, inStrings: false);
+        return string.Join("; ", pairs);
+
+        void Nodes(int at, int end, int depth, bool inStrings)
+        {
+            for (; at + 6 <= end; at = Align(at + BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(at))))
+            {
+                int length = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(at));
+                int valueLength = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(at + 2));
+                bool text = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(at + 4)) == 1;
+                if (length < 6 || length > end - at) return; // truncated or hostile: what came before stands
+                int nodeEnd = at + length, keyEnd = at + 6;
+                while (keyEnd + 1 < nodeEnd && (data[keyEnd] | data[keyEnd + 1]) != 0) keyEnd += 2;
+                var key = System.Text.Encoding.Unicode.GetString(data, at + 6, keyEnd - at - 6);
+                int value = Math.Min(Align(keyEnd + 2), nodeEnd);
+                if (depth == 3 && inStrings)
+                {
+                    // the value runs to the node's end (writers disagree on whether wValueLength counts chars or bytes)
+                    var v = System.Text.Encoding.Unicode.GetString(data, value, (nodeEnd - value) & ~1);
+                    if (v.IndexOf('\0') is var nul and >= 0) v = v[..nul];
+                    if (v.Length > 0 && keys.Add(key)) pairs.Add($"{key}={v}");
+                }
+                else if (depth < 3)
+                    Nodes(Math.Min(Align(value + (text ? valueLength * 2 : valueLength)), nodeEnd), nodeEnd, depth + 1,
+                        inStrings || depth == 1 && key == "StringFileInfo");
+            }
+        }
+
+        static int Align(int x) => (x + 3) & ~3;
     }
 
     // ---------------- raw metadata cells ----------------

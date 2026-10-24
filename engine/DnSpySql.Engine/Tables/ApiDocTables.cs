@@ -35,7 +35,7 @@ public static class ApiDocTables
                 if (c.Text("doc_id") is { } id) return Find(id, null) is { } x ? [new Doc(null, id, x.xml, x.source)] : [];
                 throw new SqlException("api_docs needs WHERE member = <handle> or WHERE doc_id = '...'");
             })
-            .Int("member", d => d.Member, pushdown: Pushdown.Eq, required: true)
+            .Handle("member", d => d.Member, required: true)
             .Text("doc_id", d => d.DocId, pushdown: Pushdown.Eq, required: true, doc: "XML documentation ID (T:, M:, F:, P:, E: prefix)")
             .Text("summary", d => Part(d.Xml, "summary"))
             .Text("returns", d => Part(d.Xml, "returns"))

@@ -51,8 +51,13 @@ public:
     // Reports a view's columns (JSON [[name, type], ...]) for the engine's catalog tables.
     void view_columns(const std::string& view, const std::string& columns_json);
     // Statement boundaries: undo grouping, timeout and cancellation in the engine.
-    // Returns the statement timeout in ms (0 = none), which the host also applies to SQLite.
-    int64_t begin_statement();
+    // Returns the runtime settings the host applies to the statement: the timeout in ms, which it also enforces on SQLite,
+    // and the row cap (0 = none for either).
+    struct StatementLimits {
+        int64_t timeout_ms = 0;
+        int64_t max_rows = 0;
+    };
+    StatementLimits begin_statement();
     // Returns the statement's notices (sidecar files written, dnSpy.xml synced), one per line; empty when none.
     std::string end_statement();
     // Cancels the running statement's managed work. Safe to call from another thread.

@@ -35,6 +35,10 @@ public sealed class LoadedModule
     public int Revision { get; set; }
     /// <summary>Raw file patches (hex editor style), applied by save_raw().</summary>
     public SortedDictionary<long, byte> RawPatches { get; } = new();
+    /// <summary>Raw patches changed since the last save_raw() (the patches stay: they are the file's state, not pending work).</summary>
+    public bool RawDirty { get; set; }
+    /// <summary>Model edits or raw patches that no save has written yet: what close() and the exit warning check.</summary>
+    public bool HasUnsavedChanges => Dirty || RawDirty;
     public string Sha256 => _sha ??= Convert.ToHexString(SHA256.HashData(FileBytes ?? OriginalBytes)).ToLowerInvariant();
     string? _sha;
     public string Md5 => _md5 ??= Convert.ToHexString(MD5.HashData(FileBytes ?? OriginalBytes)).ToLowerInvariant();
@@ -583,6 +587,7 @@ public sealed class Workspace : IWriteSink, IDisposable
         foreach (var (off, b) in lm.RawPatches) if (off < bytes.Length) bytes[off] = b;
         path = System.IO.Path.GetFullPath(path);
         File.WriteAllBytes(path, bytes);
+        lm.RawDirty = false;
         return path;
     }
 

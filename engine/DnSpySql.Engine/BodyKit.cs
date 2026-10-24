@@ -231,19 +231,11 @@ public static class AttributeKit
         throw new SqlException($"no constructor of {td.FullName} accepts {args.Count} argument(s) of the given types");
     }
 
-    static PropertyDef? FindProperty(TypeDef? t, string name)
-    {
-        for (; t != null; t = t.BaseType?.ResolveTypeDef())
-            if (t.Properties.FirstOrDefault(p => p.Name == name) is { } p) return p;
-        return null;
-    }
+    static PropertyDef? FindProperty(TypeDef? t, string name) =>
+        t == null ? null : TypeWalk.SelfAndBases(t).SelectMany(x => x.Properties).FirstOrDefault(p => p.Name == name);
 
-    static FieldDef? FindField(TypeDef? t, string name)
-    {
-        for (; t != null; t = t.BaseType?.ResolveTypeDef())
-            if (t.Fields.FirstOrDefault(p => p.Name == name) is { } f) return f;
-        return null;
-    }
+    static FieldDef? FindField(TypeDef? t, string name) =>
+        t == null ? null : TypeWalk.SelfAndBases(t).SelectMany(x => x.Fields).FirstOrDefault(f => f.Name == name);
 
     static bool TryConvert(Workspace ws, ModuleDef module, TypeSig sig, JsonElement e, out object? value)
     {

@@ -7,7 +7,7 @@ namespace DnSpySql.Tests;
 
 /// <summary>
 /// Settings the program decrypts at startup (decoded_fields), field arguments of a decryptor, values that are still
-/// ciphertext, host and port pairs. The fixtures are written for the tests (reserved .example names, keys made here).
+/// ciphertext, the literals calls are given. The fixtures are written for the tests (reserved .example names, keys made here).
 /// </summary>
 public sealed class ConfigTests : SampleTest
 {
@@ -38,14 +38,19 @@ public sealed class ConfigTests : SampleTest
         $"public static class Start{name} {{ public static void Run() {{ if ({name}.Load()) new System.Threading.Mutex(false, {name}.Mutex); }} }}";
 
     [Fact]
-    public void Settings_decrypted_at_startup_are_decoded_and_feed_the_indicators()
+    public void Settings_decrypted_at_startup_are_decoded_when_asked()
     {
         var r = Run($"select add_type('{Settings("Profile", "System.Text.Encoding.UTF8.GetString(System.Convert.FromBase64String(Secret))")}')",
             $"select add_type('{Settings("Profile2", "System.Environment.MachineName")}')",
             "select field_name, value, value_kind, decoder_name, error from decoded_fields where type_name = 'Profile' order by field_name",
             "select count(*), max(error) from decoded_fields where type_name = 'Profile2' and field is null",
-            "select kind, value, source from field_inits where field_name like '%Profile::Salt'",
-            "select kind, value, source, fields from iocs where source in ('decoded', 'encrypted') order by kind, value");
+            "select count(*) from field_inits where field_name like '%Profile::Salt'",
+            "select triage()",
+            // off: nothing is interpreted, and each table says so
+            "select set_setting('emulation', 0)",
+            "select count(*), max(error) from decoded_fields where type_name = 'Profile' and field is null",
+            "select set_setting('emulation', 1)",
+            "select value from decoded_fields where field_name like '%Profile::Host'");
         var decoded = r.Rows(2).ToDictionary(x => x.GetProperty("field_name").GetString()!.Split("::")[1], x => x);
         Assert.Equal("library.example,backup.example", decoded["Host"].GetProperty("value").GetString());
         Assert.Equal("8443,9443", decoded["Port"].GetProperty("value").GetString());
@@ -56,20 +61,17 @@ public sealed class ConfigTests : SampleTest
         // the decoder whose key comes from the machine (not this one's) changes nothing and says why
         Assert.Equal(1, r.Values(3)[0].GetInt64());
         Assert.False(string.IsNullOrEmpty(r.Values(3)[1].GetString()));
-        // the salt, computed by Encoding.ASCII.GetBytes in the static constructor
-        var salt = r.Values(4);
-        Assert.Equal(new[] { "bytes", "cctor" }, new[] { salt[0].GetString(), salt[2].GetString() });
-
-        var iocs = r.Rows(5).Select(x => $"{x.GetProperty("kind").GetString()} {x.GetProperty("value").GetString()} {x.GetProperty("source").GetString()}").ToList();
-        Assert.Contains("domain library.example decoded", iocs);
-        Assert.Contains("domain backup.example decoded", iocs);
-        Assert.Contains("host:port library.example:8443 decoded", iocs);
-        Assert.Contains("host:port backup.example:9443 decoded", iocs);
-        Assert.Contains("mutex sample-mutex-1 decoded", iocs);
-        // Profile2's mutex is still ciphertext: reported as encrypted, not as the mutex's name
-        Assert.Contains($"mutex {Seal("sample-mutex-1")} encrypted", iocs);
-        Assert.Contains(r.Rows(5), x => x.GetProperty("kind").GetString() == "host:port" && x.GetProperty("fields").GetString() == "System.String Profile::Host + System.String Profile::Port");
-        Assert.DoesNotContain(iocs, i => i.StartsWith("mutex ") && i.EndsWith(" computed"));
+        // the salt, computed by Encoding.ASCII.GetBytes in the static constructor: no constant in the IL, so not a field_inits row
+        Assert.Equal(0, r.Long(4));
+        // triage() interprets nothing: it names both settings decoders and the query that interprets them
+        var t = JsonDocument.Parse(r.Text(5)).RootElement;
+        Assert.Equal(["Profile", "Profile2"], t.GetProperty("settings_decoders").GetProperty("items").EnumerateArray()
+            .Select(d => d.GetProperty("type").GetString()!).Order().ToArray());
+        Assert.Contains(t.GetProperty("next").EnumerateArray(), n => n.GetString()!.StartsWith("SELECT field_name, value, value_kind, error FROM decoded_fields"));
+        Assert.False(t.TryGetProperty("decoded_fields", out _));
+        Assert.Equal(1, r.Values(7)[0].GetInt64());
+        Assert.StartsWith("emulation is off", r.Values(7)[1].GetString());
+        Assert.Equal("library.example,backup.example", r.Text(9)); // on again: interpreted again, not the refusal kept
     }
 
     [Fact]
@@ -80,19 +82,22 @@ public sealed class ConfigTests : SampleTest
             "select add_type('public static class K { public static string Key = \"default\"; public static void Init(string s) { Key = s; } " +
             "public static string Dec(string a) { return a + \"!\"; } } public static class UseK { public static string Go() { " +
             "return K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key) + K.Dec(K.Key); } }')",
-            // a bool is a number, not a port; a string of digits beside the host is
-            "select add_type('public static class Cfg2 { public static string Host = \"c2.example\"; public static bool Install = true; " +
-            "public static string Port = \"4449\"; public static void Use() { System.Console.WriteLine(Host + Port + Install); } }')",
-            // a hex digest from a getter is a name, not ciphertext
+            // the literals each call is given, per string parameter; a value that is not a literal is null
+            "select add_type('public static class Lit { public static void Run(string p) { new System.Threading.Mutex(false, \"sample-mutex-2\"); " +
+            "System.IO.File.WriteAllText(\"a.txt\", p); new System.Threading.Mutex(false, p); } }')",
+            // a constant behind a getter is still the IL's constant
             "select add_type('public static class M { public static string Name = Get(); static string Get() { return \"9dd4e461268c8034f5c8564e155c67a6\"; } " +
             "public static void Run() { new System.Threading.Mutex(false, Name); } }')",
             "select count(*) from decryptor_calls where decryptor = resolve('K::Dec')",
-            "select value from iocs where kind = 'host:port'",
-            "select source from iocs where kind = 'mutex' and value = '9dd4e461268c8034f5c8564e155c67a6'",
+            "select dst_name, string_args from call_edges where src = resolve('Lit::Run') and string_args is not null",
+            "select source, value from field_inits where field_name like '%M::Name'",
             "select try_decrypt(x'00000000000000000000000000000000', '3des', zeroblob(16))");
         Assert.Equal(0, r.Long(3));
-        Assert.Equal(new[] { "c2.example:4449" }, r.Rows(4).Select(x => x.GetProperty("value").GetString()));
-        Assert.Equal("computed", r.Text(5));
+        var args = r.Rows(4).Select(x => $"{x.GetProperty("dst_name").GetString()} {x.GetProperty("string_args").GetString()}").ToList();
+        Assert.Contains(args, a => a.Contains("Mutex::.ctor") && a.EndsWith("[\"sample-mutex-2\"]"));
+        Assert.Contains(args, a => a.Contains("Mutex::.ctor") && a.EndsWith("[null]"));
+        Assert.Contains(args, a => a.Contains("File::WriteAllText") && a.EndsWith("[\"a.txt\",null]"));
+        Assert.Equal(["getter", "9dd4e461268c8034f5c8564e155c67a6"], r.Values(5).Select(v => v.GetString()!).ToArray());
         Assert.Equal(System.Text.Json.JsonValueKind.Null, r.Scalar(6).ValueKind); // a weak 3DES key: NULL, not an error
     }
 
@@ -121,8 +126,8 @@ public sealed class ConfigTests : SampleTest
         Assert.All(two, x => Assert.Equal("field", x.GetProperty("args_from").GetString()));
         Assert.All(two, x => Assert.Equal("text", x.GetProperty("plaintext_kind").GetString()));
         Assert.Equal(new[] { "ciphertext" }, r.Rows(2).Select(x => x.GetProperty("plaintext_kind").GetString()));
-        Assert.Equal(5, r.Long(3)); // Two ranks as a decryptor too: its five sites have known arguments
+        Assert.Equal(5, r.Long(3)); // Two's five sites have known arguments once Cfg's fields are interpreted
         var next = JsonDocument.Parse(r.Text(4)).RootElement.GetProperty("next").EnumerateArray().Select(x => x.GetString()!).ToList();
-        Assert.Contains(next, n => n.Contains("plaintext_kind = 'ciphertext'") && n.Contains("a second layer"));
+        Assert.Contains(next, n => n.Contains("FROM decryptor_calls") && n.Contains("plaintext_kind = 'ciphertext' is a second layer"));
     }
 }

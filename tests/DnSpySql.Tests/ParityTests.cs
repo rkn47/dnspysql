@@ -190,6 +190,7 @@ public sealed class ParityTests : IDisposable
     public void Raw_patch_and_save_raw()
     {
         Q("SELECT patch_bytes(0x40, 'DE AD')");
+        Assert.Equal(1, Long("SELECT is_dirty()"));
         var outPath = Path.Combine(_dir, "raw.dll");
         Q($"SELECT save_raw({Sql(outPath)})");
         var b = File.ReadAllBytes(outPath);
@@ -197,6 +198,45 @@ public sealed class ParityTests : IDisposable
         Assert.Equal(0xAD, b[0x41]);
         Assert.Equal(0, Long("SELECT count(*) FROM byte_search WHERE pattern = 'DE AD BE EF'"));
         Assert.Equal(1, Long("SELECT count(*) FROM byte_search WHERE pattern = 'DE AD'"));
+        // saved: the patches stay what the file is, but nothing is left to save, so close() does not refuse
+        Assert.Equal(0, Long("SELECT is_dirty()"));
+        Assert.Equal(2, Long("SELECT raw_patch_count FROM modules"));
+        Q("SELECT patch_bytes(0x40, 'DE')");
+        Assert.Equal(1, Long("SELECT is_dirty()"));
+    }
+
+    [Fact]
+    public void Comments_and_tags_from_functions_undo()
+    {
+        Q("SELECT set_comment(resolve('Sample.MemberCard::Validate'), 'first')");
+        Q("SELECT set_comment(resolve('Sample.MemberCard::Validate'), 'second'), tag(resolve('Sample.MemberCard'), 'seen')");
+        Assert.Equal("second", Scalar("SELECT comment FROM comments"));
+        Assert.Equal(1, Long("SELECT undo()"));
+        Assert.Equal("first", Scalar("SELECT comment FROM comments"));
+        Assert.Equal(0, Long("SELECT count(*) FROM tags"));
+        Assert.Equal(1, Long("SELECT undo()"));
+        Assert.Equal(0, Long("SELECT count(*) FROM comments"));
+        Assert.Equal(2, Long("SELECT redo(2)"));
+        Assert.Equal("second", Scalar("SELECT comment FROM comments"));
+        Assert.Equal("seen", Scalar("SELECT tag FROM tags"));
+        // removing a comment (NULL text) undoes too
+        Q("SELECT set_comment(resolve('Sample.MemberCard::Validate'), NULL)");
+        Assert.Equal(0, Long("SELECT count(*) FROM comments"));
+        Assert.Equal(1, Long("SELECT undo()"));
+        Assert.Equal("second", Scalar("SELECT comment FROM comments"));
+    }
+
+    [Fact]
+    public void The_max_rows_setting_caps_every_front_end()
+    {
+        Assert.Equal(0, Long("SELECT value FROM runtime_settings WHERE key = 'max_rows'")); // no --max-rows: no cap of its own
+        Q("SELECT set_setting('max_rows', 3)");
+        var e = _s.Envelope("SELECT name FROM methods");
+        var result = e.GetProperty("results")[0];
+        Assert.Equal(3, result.GetProperty("rows").GetArrayLength());
+        Assert.True(result.GetProperty("truncated").GetBoolean());
+        Q("SELECT set_setting('max_rows', 0)");
+        Assert.True(_s.Envelope("SELECT name FROM methods").GetProperty("results")[0].GetProperty("rows").GetArrayLength() > 3);
     }
 
     [Fact]

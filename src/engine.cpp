@@ -236,9 +236,12 @@ void Engine::view_columns(const std::string& view, const std::string& columns_js
     call("view_columns", {Cell::text(view), Cell::text(columns_json)});
 }
 
-int64_t Engine::begin_statement() {
+Engine::StatementLimits Engine::begin_statement() {
     auto r = decode_list(call("begin_statement", {}));
-    return r.empty() ? 0 : r[0].i;
+    StatementLimits limits;
+    if (r.size() > 0) limits.timeout_ms = r[0].i;
+    if (r.size() > 1) limits.max_rows = r[1].i;
+    return limits;
 }
 std::string Engine::end_statement() {
     auto r = decode_list(call("end_statement", {}));

@@ -31,7 +31,7 @@ public static class ResourceTables
                 Str(v, "visibility").ToLowerInvariant() == "public" ? ManifestResourceAttributes.Public : ManifestResourceAttributes.Private)))
             .Int("size", r => (r.R as EmbeddedResource)?.Length)
             .Int("file_offset", r => r.R is EmbeddedResource er && !r.M.Dirty ? (long)er.CreateReader().StartOffset : null)
-            .Blob("data", r => (r.R as EmbeddedResource)?.CreateReader().ToArray(), (r, v) => ReplaceData(s, r, Values.ToBytes(v) ?? Array.Empty<byte>()))
+            .Blob("data", r => (r.R as EmbeddedResource)?.CreateReader().ToArray(), (r, v) => ReplaceData(s, r.M, r.R, Values.ToBytes(v) ?? Array.Empty<byte>(), $"replace data of {r.R.Name}"))
             .Text("sniffed_type", r => r.R is EmbeddedResource er ? Sniff(er.CreateReader().ReadBytes((int)Math.Min(SniffBytes, er.Length)), r.R.Name) : null)
             .Text("content_type", r => r.R is EmbeddedResource er ? Content(er.CreateReader().ReadBytes((int)Math.Min(EntropyBytes, er.Length))) : null,
                 doc: "from the content alone (sniffed_type adds the name's extension): png, pe, gzip, zlib, deflate (bytes that inflate, also after a 4-byte length), text, ..., 'high entropy' (encrypted) or binary")
@@ -44,14 +44,9 @@ public static class ResourceTables
         res.JournalUpdates = false;
         res.OnInsert(v =>
         {
-            var lm = ws.ModuleArg(v.GetValueOrDefault("module"));
-            var name = Str(v.GetValueOrDefault("name"), "name");
-            var data = Values.ToBytes(v.GetValueOrDefault("data")) ?? Array.Empty<byte>();
             var attrs = (Values.ToText(v.GetValueOrDefault("visibility")) ?? "public").ToLowerInvariant() == "private" ? ManifestResourceAttributes.Private : ManifestResourceAttributes.Public;
-            var er = new EmbeddedResource(name, data, attrs);
-            lm.Module.Resources.Add(er);
-            ws.Touch(lm);
-            ws.Record("resources", "INSERT INTO resources", () => { lm.Module.Resources.Remove(er); ws.Touch(lm); }, () => { lm.Module.Resources.Add(er); ws.Touch(lm); });
+            AddEmbedded(s, ws.ModuleArg(v.GetValueOrDefault("module")), Str(v.GetValueOrDefault("name"), "name"),
+                Values.ToBytes(v.GetValueOrDefault("data")) ?? Array.Empty<byte>(), attrs, "INSERT INTO resources");
             return (0, null, null);
         }).OnDelete(r =>
         {
@@ -159,16 +154,30 @@ public static class ResourceTables
         s.Ws.Record("resource_elements", $"edit {old.Name}", () => { list[idx] = old; s.Ws.Touch(lm); }, () => { list[idx] = fresh; s.Ws.Touch(lm); });
     }
 
-    static void ReplaceData(Session s, ResRow r, byte[] data)
+    /// <summary>Adds an embedded resource, journaled (INSERT INTO resources and add_resource()).</summary>
+    internal static void AddEmbedded(Session s, LoadedModule lm, string name, byte[] data, ManifestResourceAttributes attrs, string description)
     {
-        if (r.R is not EmbeddedResource old) throw new SqlException("only embedded resources carry data");
-        var list = r.M.Module.Resources;
+        var er = new EmbeddedResource(name, data, attrs);
+        lm.Module.Resources.Add(er);
+        s.Ws.Touch(lm);
+        s.Ws.Record("resources", description, () => { lm.Module.Resources.Remove(er); s.Ws.Touch(lm); }, () => { lm.Module.Resources.Add(er); s.Ws.Touch(lm); });
+    }
+
+    /// <summary>
+    /// Replaces an embedded resource's bytes, keeping its name, visibility and custom attributes, journaled
+    /// (UPDATE resources SET data and set_resource_data()).
+    /// </summary>
+    internal static void ReplaceData(Session s, LoadedModule lm, Resource r, byte[] data, string description)
+    {
+        if (r is not EmbeddedResource old) throw new SqlException("only embedded resources carry data");
+        var list = lm.Module.Resources;
         int idx = list.IndexOf(old);
+        if (idx < 0) throw new SqlException("resource no longer exists");
         var fresh = new EmbeddedResource(old.Name, data, old.Attributes);
         foreach (var ca in old.CustomAttributes) fresh.CustomAttributes.Add(ca);
         list[idx] = fresh;
-        s.Ws.Touch(r.M);
-        s.Ws.Record("resources", $"replace data of {old.Name}", () => { list[idx] = old; s.Ws.Touch(r.M); }, () => { list[idx] = fresh; s.Ws.Touch(r.M); });
+        s.Ws.Touch(lm);
+        s.Ws.Record("resources", description, () => { list[idx] = old; s.Ws.Touch(lm); }, () => { list[idx] = fresh; s.Ws.Touch(lm); });
     }
 
     public static object? ElementValue(ResourceElement e) => e.ResourceData switch

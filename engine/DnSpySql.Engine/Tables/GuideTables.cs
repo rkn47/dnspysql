@@ -16,7 +16,7 @@ public static class GuideTables
     {
         ("basics", "Rules, sessions, handles and resolve(), schema discovery, required filters, writes and undo: read first"),
         ("explore", "Understand code: orientation, search, decompiled C# and IL, callers and the Analyzer, call graphs"),
-        ("triage", "Statically triage a sample: protection, capabilities, indicators, config extraction, report"),
+        ("triage", "Statically triage a sample: protection, capabilities, literals and config, report"),
         ("unpack", "Protected and packed assemblies: anti-tamper, embedded PEs, decoding resources and payloads in SQL"),
         ("dnspy", "Hand results to dnSpy: comments, bookmarks, breakpoints, dnSpy.xml, annotated copies"),
     };

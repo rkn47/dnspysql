@@ -83,8 +83,9 @@ public static unsafe class Exports
                     NoProject = Flag("no_project"),
                     ProjectPath = Opt("project"),
                     QueryTimeoutMs = (int)Num("timeout_ms", 0),
-                    MaxRows = (int)Num("max_rows", 100_000),
+                    MaxRows = (int)Num("max_rows", 0),
                     DnSpyXml = Opt("dnspy_xml"),
+                    NoEmulation = Flag("no_emulation"),
                 };
                 if (o.TryGetProperty("ref_paths", out var refs))
                     foreach (var r in refs.EnumerateArray()) if (r.GetString() is { } p) opts.ReferencePaths.Add(p);
@@ -107,9 +108,9 @@ public static unsafe class Exports
             case "open":
                 return Wire.EncodeList(S.Open(Str(a[0], "path")).Id);
             case "begin_statement":
-                // -> the statement timeout in ms (0 = none), which the host also enforces on SQLite itself
+                // -> the statement timeout in ms, which the host also enforces on SQLite itself, and the row cap (0 = none)
                 S.BeginStatement();
-                return Wire.EncodeList(S.Settings["query_timeout_ms"].AsLong ?? 0);
+                return Wire.EncodeList(S.Settings["query_timeout_ms"].AsLong ?? 0, S.Settings["max_rows"].AsLong ?? 0);
             case "end_statement":
             {
                 // -> the statement's notices (text, one per line) or nothing
@@ -236,7 +237,7 @@ public static unsafe class Exports
                 }));
             case "dirty":
                 // names of modules with unsaved changes (for /shutdown and the REPL's exit warning)
-                return Wire.EncodeList(string.Join("\n", S.Ws.Modules.Where(m => m.Dirty || m.RawPatches.Count > 0).Select(m => m.Path)));
+                return Wire.EncodeList(string.Join("\n", S.Ws.Modules.Where(m => m.HasUnsavedChanges).Select(m => m.Path)));
             default:
                 throw new ArgumentException($"unknown op '{op}'");
         }

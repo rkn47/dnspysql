@@ -22,6 +22,28 @@ void send_json(httplib::Response& res, int status, const json& body) {
     res.set_content(body.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
 }
 
+// The outcome of a /query in headers, whatever the format: whether every statement succeeded, and the engine's notices,
+// one header per line (the text formats have no place for them, and --remote reads both from here).
+constexpr const char* kSuccessHeader = "X-DnSpySql-Success";
+constexpr const char* kNoticeHeader = "X-DnSpySql-Notice";
+
+void set_outcome(httplib::Response& res, const std::vector<StatementOutput>& results) {
+    bool ok = true;
+    for (const auto& r : results) {
+        ok = ok && r.success;
+        size_t from = 0;
+        while (from < r.notice.size()) {
+            auto to = r.notice.find('\n', from);
+            if (to == std::string::npos) to = r.notice.size();
+            auto line = r.notice.substr(from, to - from);
+            std::erase(line, '\r');
+            if (!line.empty()) res.headers.emplace(kNoticeHeader, line);
+            from = to + 1;
+        }
+    }
+    res.set_header(kSuccessHeader, ok ? "true" : "false");
+}
+
 }  // namespace
 
 struct HttpServer::Impl {
@@ -132,6 +154,7 @@ struct HttpServer::Impl {
                 return;
             }
             auto results = run(sql, o);
+            set_outcome(res, results);
             const std::string fmt = req.has_param("format") ? req.get_param_value("format") : "json";
             if (fmt == "json") {
                 send_json(res, 200, envelope(results, include_sql));
@@ -217,9 +240,18 @@ int run_remote(const std::string& url, const std::string& token, const std::stri
         std::string text = res->body;
         while (!text.empty() && (text.back() == '\n' || text.back() == ' ')) text.pop_back();
         std::cout << text << "\n";
-        if (res->status != 200 || text.find("\"success\":false") != std::string::npos || text.rfind("error:", 0) == 0 ||
-            text.find("\nerror:") != std::string::npos)
-            rc = 1;
+        // notices on stderr, as a local run prints them
+        std::string notice;
+        for (size_t i = 0, n = res->get_header_value_count(kNoticeHeader); i < n; i++)
+            notice += (notice.empty() ? "" : "\n") + res->get_header_value(kNoticeHeader, i);
+        if (!notice.empty()) std::cerr << "note: " << notice << "\n";
+        bool failed = res->status != 200;
+        if (res->has_header(kSuccessHeader))
+            failed = failed || res->get_header_value(kSuccessHeader) != "true";
+        else  // a server from before the header: judge by the text
+            failed = failed || text.find("\"success\":false") != std::string::npos || text.rfind("error:", 0) == 0 ||
+                     text.find("\nerror:") != std::string::npos;
+        if (failed) rc = 1;
         if (rc != 0 && !continue_on_error) break;
     }
     return rc;

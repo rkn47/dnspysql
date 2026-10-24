@@ -61,9 +61,11 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | Go to RVA / file offset | `rva_to_offset()`, `offset_to_rva()`, `file_bytes.rva` | ✅ |
 | Debug directory, Win32 resources (not shown by dnSpy) | `debug_directories` (CodeView GUID/age/path), `win32_resources` (+ version/manifest text) | ✅ |
 | Section entropy (not in dnSpy) | `pe_sections.entropy` | ✅ |
-| Configs in static/instance fields (not in dnSpy: read from the constructors' IL) | `field_inits` (strings, numbers, byte arrays from field data, string arrays, values a getter or decryptor computes, with the storing instruction; `is_default` marks the compiler's default stores) | ✅ |
+| Configs in static/instance fields (not in dnSpy: read from the constructors' IL) | `field_inits` (strings, numbers, byte arrays from field data, string arrays, a getter's constant, with the storing instruction; `is_default` marks the compiler's default stores; computed values are `decryptor_calls`' and `decoded_fields`') | ✅ |
 | Configs decrypted in place at startup (not in dnSpy: seen only by debugging past the decoder) | `decoded_fields` (each settings field as the decoder leaves it, interpreted after the static constructor; `error` when it stops) | ✅ |
-| Behaviour and indicators (not in dnSpy) | `capabilities` (API, import, reflection or string evidence at the call, also through proxy methods), `iocs` (URLs, IPs, domains, webhooks, tokens, wallets, registry keys, mutex names; in literals, base64 literals, decrypted strings and text resources), `text_iocs` (the same in any text) | ✅ |
+| Behaviour (not in dnSpy) | `capabilities` (API, import, reflection or string evidence at the call, also through proxy methods) | ✅ |
+| The literals a call is given (dnSpy: reading the IL before the call) | `call_edges.string_args` (per string parameter, the `ldstr` that pushes it: a mutex's name, a registry key, a URL) | ✅ |
+| Turning the IL interpreter off | the `emulation` setting, `--no-emulation` | ✅ |
 | Every call of a string decryptor and its plaintext (de4dot's string decryption, without running anything) | `decryptor_calls` (caller, offset, typed literal arguments or settings fields of known value, `plaintext` from the IL interpreter, `plaintext_kind` for a second layer), `emulate()` | ✅ |
 | Protector identification (not in dnSpy; de4dot's detection) | `protections` (marker types with decoy detection, anti-tamper, anti-debug, anti-VM, string encryption, control-flow flattening, proxy calls, IL virtualization, code-less stub assemblies, encrypted/embedded resources; each with confidence and evidence) | ✅ |
 | PE files inside a file that is no .NET module (not in dnSpy, which refuses to open it) | `carve_file WHERE path = '...'` (the PEs in its bytes, with `open_bytes(data)` for a .NET one) | ✅ |
@@ -291,7 +293,7 @@ any debugger stops there.
 | `binary` key/value with canonical keys (summary, tool_name, processor, filetype, image_base, entry_point, is_64bit, bits, md5, sha256 …) | ✅ (+ module/assembly/mvid/tfm keys) |
 | `runtime_settings` (UPDATE value), `sql_capabilities` feature matrix, `transactions` undo journal | ✅ |
 | Catalog for discovery | `dnspysql_tables`, `dnspysql_columns`, `dnspysql_functions` (+ `pragma_table_list`, `PRAGMA table_xinfo`) |
-| Required filters on expensive tables with an actionable error | `pseudocode`, `pseudocode_lines`, `pseudocode_refs`, `md_rows`, `analyze`, `search`, `byte_search`, `api_docs`, `text_iocs`, `split_text` say exactly which `WHERE` is needed; `il`, `locals`, `exception_handlers`, `blocks`, `cfg_edges` take the filter but also scan |
+| Required filters on expensive tables with an actionable error | `pseudocode`, `pseudocode_lines`, `pseudocode_refs`, `md_rows`, `analyze`, `search`, `byte_search`, `api_docs`, `split_text` say exactly which `WHERE` is needed; `il`, `locals`, `exception_handlers`, `blocks`, `cfg_edges` take the filter but also scan |
 | `pseudocode` one exact row per entity + per-line rows | `pseudocode` + `pseudocode_lines` |
 | `xrefs`, `call_edges`, `callers`, `callees`, `string_refs`, `byte_search`, `jump_entities` | ✅ (same names) |
 | `comments`, `bookmarks`, `tags`, `kv` (key/value notes) | ✅ persisted in `<input>.dnspysql.json` |

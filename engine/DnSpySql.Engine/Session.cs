@@ -11,11 +11,13 @@ public sealed class SessionOptions
     public string? ProjectPath { get; set; }
     public bool NoProject { get; set; }
     public int QueryTimeoutMs { get; set; } = 0;
-    public int MaxRows { get; set; } = 100_000;
+    public int MaxRows { get; set; }
     /// <summary>Extra reference directories (CLI --ref).</summary>
     public List<string> ReferencePaths { get; set; } = new();
     /// <summary>dnSpy settings file kept in step with breakpoints/bookmarks: null = auto, "off", or a path (CLI --dnspy-xml).</summary>
     public string? DnSpyXml { get; set; }
+    /// <summary>Start with the emulation setting off (CLI --no-emulation): nothing is interpreted.</summary>
+    public bool NoEmulation { get; set; }
 }
 
 /// <summary>A DnSpySql session: workspace + services; SQLite itself lives in the native host.</summary>
@@ -37,6 +39,8 @@ public sealed class Session : IDisposable
     /// <summary>Messages for the caller about the current statement (sidecar files written, dnSpy.xml synced).</summary>
     public List<string> Notices { get; } = new();
     public Dictionary<string, RuntimeSetting> Settings { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Bumped when the emulation setting changes, for the caches of interpreted results.</summary>
+    public int EmulationEpoch { get; private set; }
     /// <summary>Columns (name, declared type) of the SQL views in <see cref="Tables.Views"/>, for the catalog.</summary>
     public Dictionary<string, List<(string name, string type)>> ViewColumns { get; } = new(StringComparer.OrdinalIgnoreCase);
     readonly object _lock = new();
@@ -115,7 +119,7 @@ public sealed class Session : IDisposable
     // Why close() refuses a module (the host puts "close: " in front), or null. Undoing edits leaves a module marked as
     // edited, so only a save() makes it closable again.
     string? Refusal(LoadedModule m) =>
-        m.Dirty || m.RawPatches.Count > 0 ? $"module {m.Id} ({m.Name}) has unsaved edits: save() it first (undo() leaves it marked as edited)"
+        m.HasUnsavedChanges ?$"module {m.Id} ({m.Name}) has unsaved edits: save() it first (undo() leaves it marked as edited)"
         : m.Id == _projectModule && Store.Path != null ? $"module {m.Id} holds the session's project file ({Store.Path}), where annotations are " +
                                                           "saved: close the other modules instead (close_all()), or start the session with --no-project"
         : null;
@@ -230,7 +234,9 @@ public sealed class Session : IDisposable
         void Add(string key, string type, string value, string doc, bool settable = true) =>
             Settings[key] = new RuntimeSetting { Key = key, Type = type, Value = value, Doc = doc, Settable = settable };
         Add("query_timeout_ms", "int", Options.QueryTimeoutMs.ToString(), "per-statement timeout in milliseconds (0 = none)");
-        Add("max_rows", "int", Options.MaxRows.ToString(), "row cap per statement for CLI/HTTP/MCP output");
+        Add("max_rows", "int", Options.MaxRows.ToString(),
+            "row cap per statement for CLI/HTTP/MCP output, on top of each front end's own (the CLI's --max-rows default, " +
+            "the max_rows of an MCP or HTTP request): the smaller one applies; 0 = no cap of the session's own");
         Add("current_module", "int", "1", "module used when a bare metadata token is given");
         Add("decompiler_language", "string", "csharp", "default language for pseudocode/decompile(): csharp | vb | il");
         Add("decompiler_show_tokens", "bool", "0", "emit metadata token comments in IL text");
@@ -249,6 +255,9 @@ public sealed class Session : IDisposable
             "%APPDATA%\\dnSpy\\dnSpy.xml; Windows only), off, or a path. SELECT dnspy_sync() syncs now");
         Add("max_modules", "int", "0",
             "most modules open at once (0 = no limit): opening one more is refused with a reminder to close() the samples you are done with");
+        Add("emulation", "bool", Options.NoEmulation ? "0" : "1",
+            "interpret IL (never run it): emulate(), decryptor_calls.plaintext, decoded_fields, inline_strings and untamper() (--no-emulation). " +
+            "0: metadata, IL, decompiled code and the other static tables only; those say emulation is off");
         Add("read_only", "bool", Options.ReadOnly ? "1" : "0",
             "session refuses writes (--readonly); can be switched on, never off: set it to 1 to lock a session for analysis only");
     }
@@ -258,13 +267,25 @@ public sealed class Session : IDisposable
         if (!Settings.TryGetValue(key, out var s)) throw new SqlException($"unknown setting '{key}'");
         if (!s.Settable) throw new SqlException($"setting '{key}' is read-only");
         if (s.Type == "int" && Values.ParseLong(value ?? "") is null) throw new SqlException($"setting '{key}' needs an integer");
+        if (s.Type == "bool")
+            value = value?.ToLowerInvariant() switch
+            {
+                "1" or "true" or "on" or "yes" => "1",
+                "0" or "false" or "off" or "no" => "0",
+                _ => throw new SqlException($"setting '{key}' needs 1 or 0"),
+            };
+        if (key == "emulation" && value != s.Value)
+        {
+            // what was interpreted (or refused) under the other value is not kept
+            Emulator.Reset(this);
+            EmulationEpoch++;
+        }
         if (key == "read_only")
         {
             // one way: a server registered without --readonly can be locked for an analysis-only task, and a session that
             // was promised read-only (by the user, or by an earlier statement) cannot be unlocked by a later one
-            bool on = value is "1" or "true" or "on" or "yes";
+            bool on = value == "1";
             if (!on && Db.ReadOnly) throw new SqlException("read_only can only be switched on; restart without --readonly to write");
-            if (!on && value is not ("0" or "false" or "off" or "no")) throw new SqlException("setting 'read_only' needs 1 or 0");
             Db.ReadOnly |= on;
             value = Db.ReadOnly ? "1" : "0";
         }
@@ -274,7 +295,7 @@ public sealed class Session : IDisposable
             Ws.Get(id);
             Ws.CurrentModuleId = id;
         }
-        if (key == "save_strip_ready_to_run") Ws.StripReadyToRun = value is "1" or "true" or "on" or "yes";
+        if (key == "save_strip_ready_to_run") Ws.StripReadyToRun = value == "1";
         if (key == "max_modules") Ws.MaxModules = (int)Math.Clamp(Values.ParseLong(value!)!.Value, 0, int.MaxValue);
         if (key == "reference_paths")
         {

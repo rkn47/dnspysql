@@ -10,6 +10,9 @@ public sealed class AnnLocation
     public string Mvid { get; set; } = "";
     public uint Token { get; set; }
     public int Offset { get; set; } = -1;
+
+    public bool SameEntity(AnnLocation o) => Mvid == o.Mvid && Token == o.Token;
+    public bool Same(AnnLocation o) => SameEntity(o) && Offset == o.Offset;
 }
 
 public sealed class CommentRec

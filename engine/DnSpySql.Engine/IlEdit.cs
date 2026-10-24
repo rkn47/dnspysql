@@ -154,7 +154,7 @@ static class IlEdit
                 return Req(operand).ToString()!
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .Select(t => list[Index(list, int.Parse(t, CultureInfo.InvariantCulture), allowEnd: false)])
-                    .ToList();
+                    .ToArray();
 
             case OperandType.ShortInlineVar:
             case OperandType.InlineVar:

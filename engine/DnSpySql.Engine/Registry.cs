@@ -49,7 +49,8 @@ public static class Registry
             "bp_set_line", "bp_set_decompiled", "bp_toggle", "bp_enable", "bp_clear", "bp_module", "break_on_exception", "bp_export",
             "bp_import", "export_dnspy_breakpoints", "import_dnspy_breakpoints");
 
-        // Handle-valued filter columns accept bare tokens and '0x..' text (0 stays 0: "external" in call_edges/xrefs).
+        // Handle-valued filter columns accept bare tokens and '0x..' text (0 stays 0: "external" in call_edges/xrefs). A column
+        // declared with Table.Handle() is one already; the names below mark the older ones.
         s.Db.NormalizeHandle = v => v == 0 ? 0 : s.Ws.Normalize(v);
         foreach (var c in s.Db.Tables.SelectMany(t => t.Columns))
             if (c.Type == DnSpySql.Sql.SqlType.Integer && c.Pushdown != DnSpySql.Sql.Pushdown.None && HandleColumns.Contains(c.Name))

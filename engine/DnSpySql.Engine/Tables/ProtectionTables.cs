@@ -123,7 +123,7 @@ public static class ProtectionTables
                 "plaintext (bp_set(caller, offset))") { Domain = "triage" }
             .Source(c => ws.Modules(c).SelectMany(m => Calls(s, m, c.Long("decryptor"), (int)(c.Long("min_sites") ?? 5))))
             .Int("module", d => d.M.Id, pushdown: Pushdown.Eq)
-            .Int("decryptor", d => d.M.H(d.Decryptor), pushdown: Pushdown.Eq, doc: "the decryptor method; WHERE decryptor = handle takes any method")
+            .Handle("decryptor", d => d.M.H(d.Decryptor), doc: "the decryptor method; WHERE decryptor = handle takes any method")
             .Text("decryptor_name", d => d.Decryptor.FullName)
             .Int("caller", d => d.Site.FromHandle)
             .Text("caller_name", d => d.Site.From.FullName)
@@ -880,9 +880,11 @@ public static class ProtectionTables
                                    or ElementType.U2 or ElementType.I1 or ElementType.U1 or ElementType.String);
     }
 
-    public static IEnumerable<Decryptor> Decryptors(Session s, LoadedModule m, int minSites, double minLiteralShare = 0.5)
+    // interpret: arguments read from fields count as constant when the field's value can be interpreted too (what its
+    // static constructor or decoder leaves); only decryptor_calls asks for that, the ranking alone stays static
+    public static IEnumerable<Decryptor> Decryptors(Session s, LoadedModule m, int minSites, double minLiteralShare = 0.5, bool interpret = false)
     {
-        var fold = new Fold(s);
+        var fold = new Fold(s, interpret);
         var result = new List<Decryptor>();
         foreach (var meth in m.Module.GetTypes().SelectMany(t => t.Methods).Where(Shaped))
             if (Candidate(s, m, meth, minSites, fold) is { } d && d.ConstantRatio >= minLiteralShare) result.Add(d);
@@ -920,13 +922,13 @@ public static class ProtectionTables
 
     internal static IEnumerable<DecryptorCall> Calls(Session s, LoadedModule m, long? decryptor, int minSites)
     {
-        var fold = new Fold(s);
+        var fold = new Fold(s, interpret: true);
         IEnumerable<MethodDef> methods;
         if (decryptor is long h)
             // any method asked for by handle, candidate or not
             methods = Handle.Module(s.Ws.Normalize(h)) == m.Id && m.Module.ResolveToken(Handle.Token(s.Ws.Normalize(h))) is MethodDef md ? [md] : [];
         else
-            methods = Decryptors(s, m, minSites).Select(d => d.Method);
+            methods = Decryptors(s, m, minSites, interpret: true).Select(d => d.Method);
         foreach (var meth in methods)
         {
             int n = meth.MethodSig?.Params.Count ?? 0;
@@ -939,10 +941,15 @@ public static class ProtectionTables
     /// <summary>A literal argument: its text as the decompiler would print it, and its value; FromField when a static field held it.</summary>
     public sealed record Lit(string Text, object? Value, bool FromField = false);
 
-    /// <summary>What folds to a literal: getters and static fields holding a constant, remembered per query.</summary>
-    internal sealed class Fold(Session s)
+    /// <summary>
+    /// What folds to a literal: getters and static fields holding a constant, remembered per query. Interpret: a field
+    /// computed at startup folds to the value its static constructor or decoder leaves, interpreted (decryptor_calls);
+    /// otherwise only what the IL holds as a constant does.
+    /// </summary>
+    internal sealed class Fold(Session s, bool interpret = false)
     {
         public readonly Session S = s;
+        public readonly bool Interpret = interpret;
         public readonly Dictionary<IMethod, Lit?> Getters = new();
         public readonly Dictionary<FieldDef, Lit?> Fields = new();
     }
@@ -1013,7 +1020,7 @@ public static class ProtectionTables
             // computed into it in its static constructor, or what its decoder left (decoded_fields), so
             // Decrypt2(Settings.Host) is a call with a known argument. A field the program reassigns (Key = parameter)
             // has no one value.
-            else if (!twoLiterals && TriageTables.KnownValue(fold.S, fd) is { Value: { } known, Source: not "literal" } kv
+            else if (fold.Interpret && !twoLiterals && TriageTables.KnownValue(fold.S, fd) is { Value: { } known } kv
                      && unexplained.All(w => w.IsStaticConstructor && w.DeclaringType == fd.DeclaringType
                                              || kv.Source == "decoded" && TriageTables.DecodedBy(fold.S, fd) == w))
                 v = new Lit($"{fd.Name} = {Shown(known)}", known, FromField: true);

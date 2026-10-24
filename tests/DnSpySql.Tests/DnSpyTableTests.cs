@@ -326,11 +326,16 @@ public sealed class DnSpyTableTests : SampleTest
     public void Api_docs_come_from_the_reference_pack()
     {
         var r = Run("select api_doc('M:System.Convert.FromBase64String(System.String)')",
-            "select d.doc_id, d.summary, d.params from memberrefs m join api_docs d on d.member = m.handle where m.full_name like '%String::StartsWith(System.String)'");
+            "select d.doc_id, d.summary, d.params from memberrefs m join api_docs d on d.member = m.handle where m.full_name like '%String::StartsWith(System.String)'",
+            // a bare token (or its hex text) is a handle in the current module, as in every other handle filter
+            "select d.doc_id from memberrefs m join api_docs d on d.member = (m.handle & 0xFFFFFFFF) where m.full_name like '%String::StartsWith(System.String)'",
+            "select d.doc_id from memberrefs m join api_docs d on d.member = printf('0x%08X', m.handle & 0xFFFFFFFF) where m.full_name like '%String::StartsWith(System.String)'");
         Assert.Contains("base-64", r.Text(0));
         var doc = r.Rows(1).Single();
         Assert.Equal("M:System.String.StartsWith(System.String)", doc.GetProperty("doc_id").GetString());
         Assert.Contains("value:", doc.GetProperty("params").GetString());
+        Assert.Equal("M:System.String.StartsWith(System.String)", r.Text(2));
+        Assert.Equal("M:System.String.StartsWith(System.String)", r.Text(3));
         // an accessor has the documentation of its property (an indexer keeps its parameters), an event's of its event
         var acc = Run("select api_doc('M:System.Exception.get_Message')", "select api_doc('M:System.Collections.Generic.List`1.get_Item(System.Int32)')",
                       "select api_doc('M:Nope.Missing.get_Thing')");

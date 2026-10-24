@@ -6,6 +6,55 @@ namespace DnSpySql.Tests;
 public sealed class BinaryTests : SampleTest
 {
     [Fact]
+    public void Version_info_is_read_by_its_structure()
+    {
+        // the SDK's version resource, with CompanyName renamed (a key no list knows) and FileDescription's value blanked:
+        // an empty value is left out instead of pairing its key with the next key's name
+        var bytes = File.ReadAllBytes(Sample);
+        static byte[] W(string s) => System.Text.Encoding.Unicode.GetBytes(s);
+        int company = bytes.AsSpan().IndexOf(W("CompanyName"));
+        W("VendorXName").CopyTo(bytes, company);
+        int description = bytes.AsSpan().IndexOf(W("FileDescription\0"));
+        int value = description + bytes.AsSpan(description).IndexOf(W("Sample\0"));
+        Array.Clear(bytes, value, W("Sample").Length);
+        var edited = PathIn("Versioned.dll");
+        File.WriteAllBytes(edited, bytes);
+        var text = Cli.Run(edited, "select text from win32_resources where type = 'VERSION'").Ok().Text();
+        Assert.Contains("VendorXName=Sample", text);
+        Assert.Contains("FileVersion=1.0.0.0", text);
+        Assert.Contains("OriginalFilename=Sample.dll", text);
+        Assert.DoesNotContain("FileDescription", text);
+        Assert.DoesNotContain("=FileVersion", text);
+    }
+
+    [Fact]
+    public void An_app_host_names_the_assembly_it_starts()
+    {
+        // the framework-dependent launcher the SDK builds beside Sample.dll: no .NET code, only the path of the app in a
+        // 1025-byte buffer (the path, then zeros), where the SDK's template has a placeholder hash
+        var bin = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../corpus/Sample/bin"));
+        var built = Directory.GetDirectories(bin).Select(d => Path.Combine(d, "net8.0", OperatingSystem.IsWindows() ? "Sample.exe" : "Sample"))
+            .Where(File.Exists).OrderByDescending(File.GetLastWriteTimeUtc).First();
+        var bytes = File.ReadAllBytes(built);
+        int at = bytes.AsSpan().IndexOf("Sample.dll\0"u8);
+        Assert.True(at > 0);
+        string Opened(string name, byte[] path)
+        {
+            var copy = (byte[])bytes.Clone();
+            Array.Clear(copy, at, 1025);
+            path.CopyTo(copy, at);
+            File.WriteAllBytes(PathIn(name), copy);
+            return Cli.Run(PathIn(name), "SELECT 1").Error;
+        }
+        Assert.Contains("it starts Sample.dll,", Opened("host.exe", "Sample.dll"u8.ToArray()));
+        // a name that starts like a system DLL's is still the app's, and a path keeps its folders
+        Assert.Contains("it starts VersionTool.dll,", Opened("v.exe", "VersionTool.dll"u8.ToArray()));
+        Assert.Contains(@"it starts app\Main.dll,", Opened("sub.exe", @"app\Main.dll"u8.ToArray()));
+        // the unbound template: no app to name
+        Assert.Contains("it starts an assembly beside it", Opened("template.exe", "c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2"u8.ToArray()));
+    }
+
+    [Fact]
     public void A_reference_name_cannot_steer_the_resolver_out_of_its_search_paths()
     {
         // The resolver probes Path.Combine(dir, name + ".dll"): a reference named ..\Probe (or \\host\share\x) would reach
