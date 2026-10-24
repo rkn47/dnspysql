@@ -91,7 +91,8 @@ public static class TriageFunctions
             // no name: each stage gets one from its hash (a fixed name fails on the second row)
             next.Add($"SELECT open_bytes(data) AS module FROM embedded_pes WHERE module = {m.Id} AND is_dotnet  -- then triage each new module");
 
-        var decryptors = ProtectionTables.Decryptors(s, m, 5).Where(d => !TriageTables.IsLibrary(d.Method)).OrderByDescending(d => d.Score).ToList();
+        var decryptors = ProtectionTables.Decryptors(s, m, 5).Where(d => !TriageTables.IsLibrary(d.Method) && ProtectionTables.ReturnsText(d.Method))
+            .OrderByDescending(d => d.Score).ToList();
         o["string_decryptors"] = Counted(decryptors.Count, decryptors.Take(5).Select(d => (JsonNode?)new JsonObject
         {
             ["method"] = m.H(d.Method), ["name"] = d.Method.FullName, ["call_sites"] = d.Sites, ["constant_sites"] = d.ConstantSites, ["score"] = d.Score,

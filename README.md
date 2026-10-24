@@ -239,7 +239,7 @@ every dnSpy window and command to it.
 
 ### Tables
 
-Every table and view, by area (102 in all; click an area to open it). *writes* lists what the table
+Every table and view, by area (103 in all; click an area to open it). *writes* lists what the table
 accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused with `--readonly`. Columns are in
 [docs/SCHEMA.md](docs/SCHEMA.md).
 
@@ -330,7 +330,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 </details>
 
 <details>
-<summary><b>Triage: protection, capabilities, configs</b> (9)</summary>
+<summary><b>Triage: protection, capabilities, configs</b> (10)</summary>
 
 | table | writes | description |
 |---|---|---|
@@ -339,6 +339,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 | `decoded_fields` |  | Settings as the program decrypts them at startup: a settings class's fields after the method that decodes them in place (key from another field), interpreted |
 | `decryptor_calls` |  | Every call of a string decryptor with literal arguments (or settings fields of known value): what it decrypts (interpreted), where to break, whether it is still ciphertext |
 | `embedded_pes` |  | PE files inside a module: in its file bytes (overlay, sections), in resources and `.resources` entries, also compressed or split across numbered resources |
+| `emulator_model` |  | What the IL interpreter (emulate, decryptor_calls, decoded_fields, untamper) answers for the environment, which framework types and members it calls, and what it refuses: why a plaintext says %TEMP%\, or why an emulation stopped |
 | `field_inits` |  | Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also through a getter |
 | `protections` |  | Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques (anti-tamper, IL virtualization, a code-less stub, ...), with evidence |
 | `split_text` |  | A text cut at a `separator` (default ','), one row per piece: configs are often one delimited string (needs `WHERE text = ...`) |
@@ -612,10 +613,17 @@ from there. They read the IL as it is, except `decoded_fields` and `decryptor_ca
 literal, and `call_edges.string_args` the literals each call is given (`SELECT dst_name, string_args FROM call_edges
 WHERE string_args IS NOT NULL AND is_external`: a mutex's name, a registry key, a URL).
 
+What counts as an argument is the same everywhere (`string_decryptors`, `decryptor_calls`, `inline_strings`,
+`string_args`, `capabilities`, field values): the instructions that push it, found over the nops and branches to the
+next instruction obfuscators insert, and arithmetic on constants is folded to its value (`ldc 0x1234; ldc 0x1235;
+xor` is the argument 1). A call through proxies (static methods that only pass their arguments on, which obfuscators
+put in front of every API) names the method behind them in `call_edges.target` / `target_name` (`proxies` says how
+many), and `callers` lists it with `via = 'proxy'`.
+
 | table | what it finds |
 |---|---|
-| `field_inits` | The constants constructors store in fields (strings, numbers, byte arrays from field data, string arrays), also through a getter (`source`). Malware settings classes are filled this way, so the host, port, mutex and key are usually one query away. `is_default` marks the compiler's stores of 0, false and "" for fields with an explicit initializer. A value a call computes is not here: `decryptor_calls` and `decoded_fields` interpret it. |
-| `capabilities` | What the code does, at the call or string that shows it: process injection and hollowing, persistence, download and execute, in-memory loading, keylogging, screen capture, webcam and audio capture, credential theft, defense tampering, recovery inhibition, UAC bypass, hosts-file tampering, removable-drive spreading, shellcode execution, single instance, self-deletion, and network use (`SELECT DISTINCT kind FROM capabilities` lists what a sample has). APIs looked up by name (`GetProcAddress`, `GetMethod`) count too, and a call made through a proxy (a static method that only passes its arguments on, which obfuscators put in front of every API) is reported where the proxy is called. Call graphs (`callers`, `xrefs`) link an async method or iterator to its state machine's `MoveNext` (`kind = 'async'`), so a capability found there leads back to the method that started it. |
+| `field_inits` | The constants constructors store in fields (strings, numbers, byte arrays from field data, string arrays), also through a getter or as arithmetic on constants (`source`: literal, getter, folded). Malware settings classes are filled this way, so the host, port, mutex and key are usually one query away. `is_default` marks the compiler's stores of 0, false and "" for fields with an explicit initializer. A value a call computes is not here: `decryptor_calls` and `decoded_fields` interpret it. |
+| `capabilities` | What the code does, at the call or string that shows it: process injection and hollowing, persistence, download and execute, in-memory loading, keylogging, screen capture, webcam and audio capture, credential theft, defense tampering, recovery inhibition, UAC bypass, hosts-file tampering, removable-drive spreading, shellcode execution, single instance, self-deletion, and network use (`SELECT DISTINCT kind FROM capabilities` lists what a sample has). APIs looked up by name (`GetProcAddress`, `GetMethod`) count too, and a call made through a proxy (a static method that only passes its arguments on, which obfuscators put in front of every API) is reported where the proxy is called. `basis` says what a row rests on: `api` (a call), `import` (a P/Invoke), `resolved by name`, or `string` (a fragment of a literal: a judgment, not a call). The labels are one list, `engine/DnSpySql.Engine/Rules/capabilities.json`; the facts behind them are `call_edges` and `pinvokes`. Call graphs (`callers`, `xrefs`) link an async method or iterator to its state machine's `MoveNext` (`kind = 'async'`), so a capability found there leads back to the method that started it. |
 | `decoded_fields` | Interpreted. Settings the program decrypts at startup: a class whose static constructor stores string literals (usually ciphertext) and a parameterless static method that reads them and writes them back through a call, often with a key derived from another field (`Host = Decrypt(Host)`). The decoder is interpreted after the static constructor, and each field it changed has a row with its `initial` and decoded `value`; `error` says why a decoder stopped. Nothing here names a family: it is the shape settings code has. |
 | `embedded_pes` | Every PE a module carries: anywhere in its file bytes (the overlay, a section) and in resources or `.resources` entries, also behind gzip, zlib or deflate (Costura's compressed references, a loader's payload). The size comes from the PE headers, so `SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet` opens each next stage, named from its hash; a native one has its `machine` and `kind` (open_bytes leaves it out with a note). A PE stored in pieces across numbered resources or `.resources` entries (`part1`..`part3`, `chunk_00.bin`, ...) is put back together: the pieces joined in order or reversed, as bytes or as base64 text (also reversed), plain or compressed; `location` says which pieces and how they were joined. |
 | `decryptor_calls` | Every call of a string decryptor (`string_decryptors`, or any method with `WHERE decryptor =`) with literal arguments (also a static field of known value: a constant, or, interpreted, what its static constructor computes into it or its `decoded_fields` value, so `Decode(Config.Host)` is interpreted; `args_from = 'field'`), typed in `arg0`..`arg3`, and its `plaintext`: computed by interpreting the decryptor's IL when the column is read (`emulation` says why when it cannot be). `plaintext_kind = 'ciphertext'` marks a plaintext that is base64 of more ciphertext, a second layer another method decrypts. `emulate(method, args...)` does the same for any static method. |
@@ -653,8 +661,11 @@ metadata, IL and decompiled code only.
 - **Reflection** over the code's own metadata (`GetMethod`, `Invoke`, `CreateDelegate`, `FieldInfo.SetValue`, tokens
   resolved through the module) works on descriptions, never on real `MethodInfo`s: an invoked sample method is
   interpreted, a framework one goes through the allowlist.
-- **Data:** the sample's own resources are read from the file; machine-specific values come back as placeholders
-  (`%TEMP%\`, `%USERNAME%`). An assembly the code loads from bytes is parsed, never run; its methods are interpreted
+- **The environment:** what the code asks of the machine is answered from one list, which `emulator_model` shows
+  with the allowlist and what is refused: machine-specific values are placeholders (`%TEMP%\`, `%USERNAME%`,
+  `%APPDIR%\` for the sample's own location), anti-debug checks get a process without a debugger, and what only
+  takes time or sets up a UI (`Thread.Sleep`, `Application.EnableVisualStyles`) returns at once.
+- **Data:** the sample's own resources are read from the file. An assembly the code loads from bytes is parsed, never run; its methods are interpreted
   when the code calls them. A sample's own LZMA decoder is interpreted like any other code; on data it decodes,
   `decompress(data, 'lzma')` gives the same result natively.
 - **What stops it:** anything else, such as P/Invoke, the registry or the network, stops the emulation with the
@@ -674,9 +685,9 @@ encrypted until runtime), anti-debug and anti-VM checks, string encryption, cont
 virtualization (methods that only hand an id and their arguments to one dispatcher, whose code is VM bytecode; their
 `decompile()` says so), a stub assembly with no method body (its code is in what it carries, or an encrypted
 section), and encrypted or embedded resources. Methods of a C++/CLI image are native code, not encrypted bodies.
-`string_decryptors` ranks the methods shaped like a string decryptor: static,
-returning a string, and called from many sites with literal arguments. Breakpoints on one show the plaintext in
-dnSpy.
+`string_decryptors` ranks the methods shaped like a decryptor of constants: static, returning a string (or a number
+or byte array: `return_type`), and called from many sites with constant arguments. Breakpoints on one show the
+plaintext in dnSpy.
 
 ```sql
 SELECT name, kind, confidence, evidence FROM protections;

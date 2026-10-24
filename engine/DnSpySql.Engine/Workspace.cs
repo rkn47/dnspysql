@@ -168,9 +168,10 @@ public sealed class Workspace : IWriteSink, IDisposable
     /// </summary>
     LoadedModule OpenBundle(string path, byte[] host, BundleInfo bundle)
     {
-        var main = Bundle.MainAssembly(bundle) ?? throw new SqlException($"{path} is a single-file bundle without managed assemblies");
+        var main = Bundle.MainAssembly(bundle, host) ?? throw new SqlException($"{path} is a single-file bundle without managed assemblies");
         var deps = new List<AssemblyDef>();
-        foreach (var e in bundle.Entries.Where(e => e.Type == 1 && e != main && !Bundle.IsFramework(e)))
+        var framework = Bundle.FrameworkEntries(host, bundle);
+        foreach (var e in bundle.Entries.Where(e => e.Type == 1 && e != main && !framework.Contains(e)))
         {
             try
             {

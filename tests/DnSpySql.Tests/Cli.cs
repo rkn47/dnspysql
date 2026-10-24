@@ -126,6 +126,16 @@ public static class Cli
     public static string Sql(string s) => "'" + s.Replace("'", "''") + "'";
 }
 
+/// <summary>
+/// SQL statements that compile C# fixture code into the sample (add_type, add_members), with the source quoted for SQL:
+/// a test writes the C# as it is, in a raw string literal, with no escaping of quotes or commas.
+/// </summary>
+public static class Fixture
+{
+    public static string AddType(string csharp) => $"select add_type({Cli.Sql(csharp)})";
+    public static string AddMembers(string type, string csharp) => $"select add_members(resolve({Cli.Sql(type)}), {Cli.Sql(csharp)})";
+}
+
 /// <summary>A temporary directory holding a fresh copy of the sample assembly; removed after the test.</summary>
 public abstract class SampleTest : IDisposable
 {

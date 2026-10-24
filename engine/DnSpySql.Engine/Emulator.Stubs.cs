@@ -323,9 +323,8 @@ public sealed partial class Emulator
         finally { _reflectedDepth--; }
     }
 
-    // What a decryptor may ask of its environment, answered without touching it: its own assembly's resources come from
-    // the file, and machine-specific values come back as placeholders (%TEMP%\, %USERNAME%), so the plaintext says
-    // where a path would go instead of naming the analyst's machine.
+    // What a decryptor may ask of the code around it, answered from the file: its own assembly and resources, types and
+    // modules, assemblies it loads from bytes. What it asks of the machine is in Emulator.Environment.cs.
     bool Stubbed(IMethod target, object?[] a, Code op, MethodDef caller, out object? result)
     {
         result = null;
@@ -334,6 +333,7 @@ public sealed partial class Emulator
         string? Arg(int i) => i < a.Length ? (a[i] is Ref rr ? rr.Get() : a[i]) as string : null;
         var module = ModuleOf(caller.Module) ?? throw new Failed("caller outside the loaded modules");
         if (Reflected(target, full, self, a, op, caller, out result)) return true;
+        if (AnsweredManaged(full, caller, self, a, out result)) return true;
         switch (full)
         {
             case "System.Reflection.Assembly System.Reflection.Assembly::GetExecutingAssembly()":
@@ -379,57 +379,10 @@ public sealed partial class Emulator
             case "System.Boolean System.Reflection.Assembly::op_Equality(System.Reflection.Assembly,System.Reflection.Assembly)":
             case "System.Boolean System.Reflection.Assembly::op_Inequality(System.Reflection.Assembly,System.Reflection.Assembly)":
                 result = (Equals(a[0], a[1]) ^ target.Name == "op_Inequality") ? 1 : 0; return true;
-            case "System.String System.Environment::get_SystemDirectory()": result = @"%SystemRoot%\system32"; return true;
-            case "System.String System.IO.Path::GetTempFileName()": result = @"%TEMP%\tmp0000.tmp"; return true;
             case "System.Reflection.Assembly System.Reflection.Assembly::Load(System.Byte[])" when a[0] is byte[] asmBytes:
                 result = LoadAssembly(asmBytes); return true;
             case "System.Object System.Runtime.CompilerServices.RuntimeHelpers::GetObjectValue(System.Object)":
                 result = Copy(a[0] is Ref gr ? gr.Get() : a[0]); return true;
-            case "System.AppDomain System.AppDomain::get_CurrentDomain()":
-                result = new AppDomainStub(); return true;
-            case "System.Void System.AppDomain::add_AssemblyResolve(System.ResolveEventHandler)" when self is AppDomainStub:
-            case "System.Void System.AppDomain::add_ResourceResolve(System.ResolveEventHandler)" when self is AppDomainStub:
-            case "System.Void System.AppDomain::add_TypeResolve(System.ResolveEventHandler)" when self is AppDomainStub:
-                return true; // the loaded assemblies are found by name (_loaded); the handler is not needed
-            // lock statements: one thread here, so locks are always free
-            case "System.Void System.Threading.Monitor::Enter(System.Object)":
-            case "System.Void System.Threading.Monitor::Exit(System.Object)":
-                return true;
-            case "System.Void System.Threading.Monitor::Enter(System.Object,System.Boolean&)":
-                if (a.Length == 2 && a[1] is Ref taken) taken.Set(1);
-                return true;
-            case "System.Void System.Threading.Thread::.ctor(System.Threading.ThreadStart)":
-            case "System.Void System.Threading.Thread::.ctor(System.Threading.ParameterizedThreadStart)":
-                result = new ThreadStub(a[0]); return true;
-            case "System.Void System.Threading.Thread::Start()" when self is ThreadStub:
-            case "System.Void System.Threading.Thread::Start(System.Object)" when self is ThreadStub:
-            case "System.Void System.Threading.Thread::set_IsBackground(System.Boolean)" when self is ThreadStub:
-            case "System.Void System.Threading.Thread::set_Priority(System.Threading.ThreadPriority)" when self is ThreadStub:
-            case "System.Void System.Threading.Thread::set_Name(System.String)" when self is ThreadStub:
-                return true;
-            case "System.Void System.Threading.Thread::Join()" when self is ThreadStub:
-            case "System.Boolean System.Threading.Thread::Join(System.Int32)" when self is ThreadStub:
-                throw new Failed("Thread.Join: the code waits for a thread's result, and a started thread's code is not run here");
-            case "System.Diagnostics.Process System.Diagnostics.Process::GetCurrentProcess()":
-                result = new ProcessStub(); return true;
-            case "System.IntPtr System.Diagnostics.Process::get_Handle()" when self is ProcessStub:
-                result = -1L; return true; // the current-process pseudo handle
-            case "System.Int32 System.Diagnostics.Process::get_Id()" when self is ProcessStub:
-                result = 4242; return true;
-            case "System.Boolean System.Diagnostics.Debugger::get_IsAttached()":
-            case "System.Boolean System.Diagnostics.Debugger::IsLogging()":
-                result = 0; return true;
-            case "System.Void System.Environment::FailFast(System.String)":
-            case "System.Void System.Environment::Exit(System.Int32)":
-                throw new Failed($"the code would end the process here ({target.Name})");
-            case "System.String System.IO.Path::GetTempPath()": result = "%TEMP%\\"; return true;
-            case "System.String System.Environment::GetEnvironmentVariable(System.String)": result = $"%{Arg(0)}%"; return true;
-            case "System.String System.Environment::get_UserName()": result = "%USERNAME%"; return true;
-            case "System.String System.Environment::get_MachineName()": result = "%COMPUTERNAME%"; return true;
-            case "System.String System.Environment::get_UserDomainName()": result = "%USERDOMAIN%"; return true;
-            case "System.String System.Environment::get_NewLine()": result = "\r\n"; return true;
-            case "System.String System.Environment::GetFolderPath(System.Environment/SpecialFolder)":
-                result = $"%{Enum.GetName(typeof(Environment.SpecialFolder), (int)AsLong(a[0])) ?? "folder " + a[0]}%"; return true;
         }
         // pointers are numbers here: IntPtr/UIntPtr conversions keep the value
         if (target.DeclaringType?.FullName is "System.IntPtr" or "System.UIntPtr"

@@ -163,12 +163,6 @@ public sealed partial class Emulator
 
     static readonly HashSet<string> ObjectMembers = ["ToString", "Equals", "GetHashCode", "CompareTo"];
 
-    static bool Nondeterministic(string full) =>
-        full.Contains(" System.Random::", StringComparison.Ordinal) || full.Contains(" System.Security.Cryptography.RandomNumberGenerator::", StringComparison.Ordinal)
-        || full.Contains(" System.Guid::NewGuid(", StringComparison.Ordinal) || full.Contains(" System.DateTime::get_Now(", StringComparison.Ordinal)
-        || full.Contains(" System.DateTime::get_UtcNow(", StringComparison.Ordinal) || full.Contains(" System.Environment::get_TickCount", StringComparison.Ordinal)
-        || full.Contains(" System.Diagnostics.Stopwatch::", StringComparison.Ordinal);
-
     // A parameter type the interpreter can hand to the framework: a value it models (primitives, strings, enums, arrays
     // of them) or an instance of an allowed type
     static bool Modelled(Type t) =>

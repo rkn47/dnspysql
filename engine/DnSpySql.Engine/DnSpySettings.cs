@@ -130,11 +130,10 @@ public static class DnSpySettings
                 foreach (var old in Children(sect, child).Where(x => key(x) is { } k && drop.Contains(k)).ToList()) old.Remove();
             foreach (var (k, e) in mine) { sect!.Add(e); written.Add(k); count++; }
         }
-        XElement? SectFor(Guid g, bool create) =>
-            create ? Sect(root, g) : root.Elements("section").FirstOrDefault(x => Guid.TryParse(Unesc((string?)x.Attribute("_")), out var v) && v == g);
+        XElement? SectFor(Guid g, bool create) => create ? Sect(root, g) : FindSection(root, g);
 
         // ---- code breakpoints: ours replace dnSpy's at the same location (file name, assembly, token, offset) ----
-        static string Where(XElement bpl) => $"bp:{FileOf(A(bpl, "ModuleName"))}|{A(bpl, "AssemblyFullName")}|{A(bpl, "Token")}|{A(bpl, "Offset")}";
+        static string Where(XElement bpl) => $"{Kind.Breakpoint}{FileOf(A(bpl, "ModuleName"))}|{A(bpl, "AssemblyFullName")}|{A(bpl, "Token")}|{A(bpl, "Offset")}";
         var ours = new List<(string, XElement)>();
         foreach (var b in s.Store.Breakpoints.OrderBy(b => b.Id))
         {
@@ -156,7 +155,7 @@ public static class DnSpySettings
         // ---- bookmarks (the section is only created when there are any, so dnSpy's own list is kept otherwise): ours
         // replace dnSpy's at the same location. dnSpy has no bookmark comment, so a comment follows the name after
         // BookmarkCommentSeparator.
-        static string Mark(XElement bml) => $"bm:{FileOf(A(bml, "ModuleName"))}|{A(bml, "AssemblyFullName")}|{A(bml, "__BMT")}|{A(bml, "Token")}|{A(bml, "Offset")}";
+        static string Mark(XElement bml) => $"{Kind.Bookmark}{FileOf(A(bml, "ModuleName"))}|{A(bml, "AssemblyFullName")}|{A(bml, "__BMT")}|{A(bml, "Token")}|{A(bml, "Offset")}";
         var marks = new List<(string, XElement)>();
         foreach (var b in s.Store.Bookmarks.OrderBy(b => b.Id))
         {
@@ -175,7 +174,7 @@ public static class DnSpySettings
         Merge(SectFor(BookmarksGuid, marks.Count > 0), "Bookmark", x => Children(x, "BML").FirstOrDefault() is { } l ? Mark(l) : null, marks);
 
         // ---- module breakpoints (the section is only created when configured) ----
-        static string Key(XElement x) => "mod:" + string.Join("|", new[] { "ModuleName", "IsDynamic", "IsInMemory", "IsLoaded", "Order", "AppDomainName", "ProcessName" }.Select(n => A(x, n)));
+        static string Key(XElement x) => Kind.ModuleBreakpoint + string.Join("|", new[] { "ModuleName", "IsDynamic", "IsInMemory", "IsLoaded", "Order", "AppDomainName", "ProcessName" }.Select(n => A(x, n)));
         var mine = only != null ? [] : s.Store.ModuleBreakpoints.OrderBy(b => b.Id).Select(b => Section("Breakpoint", ("IsEnabled", b.Enabled),
             ("ModuleName", string.IsNullOrEmpty(b.ModuleName) ? null : b.ModuleName), ("IsDynamic", b.IsDynamic), ("IsInMemory", b.IsInMemory),
             ("IsLoaded", b.IsLoaded), ("Order", b.Order), ("AppDomainName", string.IsNullOrEmpty(b.AppDomainName) ? null : b.AppDomainName),
@@ -184,7 +183,7 @@ public static class DnSpySettings
 
         // ---- exception settings (the section is only created when configured): ours replace dnSpy's entry for the same
         // exception; removing an earlier Update entry returns dnSpy to its default for that exception ----
-        static string ExKey(string category, string name) => $"ex:{category}|{name}";
+        static string ExKey(string category, string name) => $"{Kind.Exception}{category}|{name}";
         var exs = SectFor(ExceptionSettingsGuid, only == null && s.Store.ExceptionSettings.Count > 0);
         if (exs != null)
             foreach (var cs in Children(exs, "Category").ToList())
@@ -235,9 +234,21 @@ public static class DnSpySettings
     // The section for `guid`, created at the end of the file when missing.
     static XElement Sect(XElement root, Guid guid)
     {
-        var e = root.Elements("section").FirstOrDefault(x => Guid.TryParse(Unesc((string?)x.Attribute("_")), out var g) && g == guid);
+        var e = FindSection(root, guid);
         if (e == null) root.Add(e = new XElement("section", new XAttribute("_", guid.ToString())));
         return e;
+    }
+
+    // A top-level section by the GUID dnSpy names it with (export, import and the dnspy_* tables all look it up so).
+    static XElement? FindSection(XElement? root, Guid guid) =>
+        root?.Elements("section").FirstOrDefault(x => Guid.TryParse(Unesc((string?)x.Attribute("_")), out var g) && g == guid);
+
+    // What an export remembers it wrote (ProjectStore.DnSpyExports), by kind: the prefix and what follows it are stored in
+    // project files, so they stay as they are.
+    static class Kind
+    {
+        public const string Breakpoint = "bp:", Bookmark = "bm:", ModuleBreakpoint = "mod:", Exception = "ex:", Debugger = "dbg:", Watch = "watch:",
+            Document = "doc:";
     }
 
     static IEnumerable<XElement> Children(XElement e, string name) =>
@@ -254,17 +265,17 @@ public static class DnSpySettings
         IEnumerable<string> Prev(string kind) => prev.Where(k => k.StartsWith(kind, StringComparison.Ordinal)).Select(k => k[kind.Length..]);
 
         // ---- debugger settings: attributes named after DebuggerSettings properties ----
-        var dbgPrev = Prev("dbg:").ToList();
+        var dbgPrev = Prev(Kind.Debugger).ToList();
         if (st.DebuggerSettings.Count > 0 || dbgPrev.Count > 0)
         {
             var dbg = Sect(root, DebuggerSettingsGuid);
             foreach (var name in dbgPrev.Where(n => !st.DebuggerSettings.ContainsKey(n))) dbg.Attribute(name)?.Remove();
-            foreach (var (name, value) in st.DebuggerSettings) { dbg.SetAttributeValue(name, value ? "True" : "False"); written.Add("dbg:" + name); count++; }
+            foreach (var (name, value) in st.DebuggerSettings) { dbg.SetAttributeValue(name, value ? "True" : "False"); written.Add(Kind.Debugger + name); count++; }
         }
 
         // ---- Watch windows: Watch Index=N → Expression Value=... ----
         static string WatchKey(int window, string expr) => $"{window}|{expr}";
-        var watchPrev = Prev("watch:").ToHashSet();
+        var watchPrev = Prev(Kind.Watch).ToHashSet();
         if (st.Watch.Count > 0 || watchPrev.Count > 0)
         {
             var w = Sect(root, WatchGuid);
@@ -277,13 +288,13 @@ public static class DnSpySettings
                 var win = Children(w, "Watch").FirstOrDefault(e => A(e, "Index") == x.Window.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 if (win == null) w.Add(win = Section("Watch", ("Index", x.Window)));
                 if (!Children(win, "Expression").Any(e => A(e, "Value") == x.Expression)) win.Add(Section("Expression", ("Value", x.Expression)));
-                written.Add("watch:" + WatchKey(x.Window, x.Expression));
+                written.Add(Kind.Watch + WatchKey(x.Window, x.Expression));
                 count++;
             }
         }
 
         // ---- files dnSpy opens at startup: File name=... in the current FileList ----
-        var docPrev = Prev("doc:").ToHashSet();
+        var docPrev = Prev(Kind.Document).ToHashSet();
         if (st.Documents.Count > 0 || docPrev.Count > 0)
         {
             var tabs = Sect(root, DocumentTabsGuid);
@@ -302,7 +313,7 @@ public static class DnSpySettings
             {
                 if (!Children(list, "File").Any(f => string.Equals(A(f, "name"), d.Path, StringComparison.OrdinalIgnoreCase)))
                     list.Add(Section("File", ("name", d.Path)));
-                written.Add("doc:" + d.Path.ToUpperInvariant());
+                written.Add(Kind.Document + d.Path.ToUpperInvariant());
                 count++;
             }
         }
@@ -321,7 +332,7 @@ public static class DnSpySettings
             var read = _read; // one reference: a reader on another thread sees a whole entry or none
             if (read == null || read.Path != path || read.Time != info.LastWriteTimeUtc || read.Length != info.Length)
                 _read = read = new ParsedFile(path, info.LastWriteTimeUtc, info.Length, XDocument.Load(path).Root);
-            return read.Root?.Elements("section").FirstOrDefault(x => Guid.TryParse(Unesc((string?)x.Attribute("_")), out var g) && g == guid);
+            return FindSection(read.Root, guid);
         }
         catch (Exception e) when (e is System.Xml.XmlException or IOException or UnauthorizedAccessException) { return null; }
     }
@@ -342,7 +353,7 @@ public static class DnSpySettings
         catch (System.Xml.XmlException e) { throw new SqlException($"{path} is not valid XML: {e.Message}"); }
         int count = 0;
         var before = s.Store.DebuggerSnapshot();
-        XElement? Sect(Guid g) => root.Elements("section").FirstOrDefault(e => Guid.TryParse(Unesc((string?)e.Attribute("_")), out var x) && x == g);
+        XElement? Sect(Guid g) => FindSection(root, g);
         // The loaded module a dnSpy location names: same file name (and assembly), else the same assembly elsewhere.
         LoadedModule? ModuleOf(XElement loc)
         {
@@ -408,9 +419,7 @@ public static class DnSpySettings
                     Order = int.TryParse(A(bp, "Order"), out var o) ? o : null, AppDomainName = A(bp, "AppDomainName"), ProcessName = A(bp, "ProcessName"),
                 };
                 // the same breakpoint again (a second import, or one an export wrote) updates the existing one
-                var rec = s.Store.ModuleBreakpoints.FirstOrDefault(x => x.ModuleName == imported.ModuleName && x.IsDynamic == imported.IsDynamic
-                    && x.IsInMemory == imported.IsInMemory && x.IsLoaded == imported.IsLoaded && x.Order == imported.Order
-                    && x.AppDomainName == imported.AppDomainName && x.ProcessName == imported.ProcessName);
+                var rec = s.Store.ModuleBreakpoints.FirstOrDefault(x => x.SameTarget(imported));
                 if (rec != null) rec.Enabled = imported.Enabled; else s.Store.ModuleBreakpoints.Add(imported);
                 count++;
             }

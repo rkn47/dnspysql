@@ -14,7 +14,7 @@ namespace DnSpySql.Tables;
 public static class TriageTables
 {
     public sealed record FieldInit(LoadedModule M, IField Field, MethodDef SetIn, uint Offset, string Kind, object? Value, string Source = "literal");
-    public sealed record Capability(LoadedModule M, string Kind, string Api, XRef Site, string Evidence);
+    public sealed record Capability(LoadedModule M, string Kind, string Api, XRef Site, string Evidence, string Basis);
     /// <summary>A settings field as a decoder leaves it (Field null: the decoder changed none, and Error says why).</summary>
     public sealed record Decoded(LoadedModule M, FieldDef? Field, TypeDef Settings, object? Initial, object? Value, MethodDef Decoder, uint Offset, string? Error);
 
@@ -34,8 +34,8 @@ public static class TriageTables
             .Int("offset", f => f.Offset, doc: "IL offset of the store")
             .Text("kind", f => f.Kind, doc: "string | int | real | bool | bytes | string[]")
             .Col("value", SqlType.Any, f => f.Value, doc: "the value; a JSON array for string[]")
-            .Text("source", f => f.Source, doc: "literal | getter (a method returning a constant). A value a call computes is not here: " +
-                                                "decryptor_calls and decoded_fields interpret it")
+            .Text("source", f => f.Source, doc: "literal | getter (a method returning a constant) | folded (arithmetic on constants, as " +
+                                                "obfuscators write a literal). A value a call computes is not here: decryptor_calls and decoded_fields interpret it")
             .Int("readers", f => f.Field is FieldDef fd ? s.Index.To(f.M.H(fd)).Count(x => x.Kind is "read" or "addr") : null,
                 doc: "instructions that read the field")
             .Bool("is_default", f => f.Value is null or 0L or 0 or false or "" || f.Value is double d && d == 0,
@@ -55,7 +55,9 @@ public static class TriageTables
             .Text("method_name", r => r.Site.From.FullName)
             .Int("offset", r => r.Site.Offset, doc: "IL offset of the call or string")
             .Text("evidence", r => r.Evidence)
-            .Bool("is_library", r => IsLibrary(r.Site.From), doc: "the method belongs to a well-known library namespace")
+            .Text("basis", r => r.Basis, doc: "api (a call, also through proxies) | import (a P/Invoke) | resolved by name (an API name handed to GetProcAddress, " +
+                                               "GetMethod or a wrapper) | string (a fragment of a literal: a judgment, not a call; Rules/capabilities.json)")
+            .Bool("is_library", r => IsLibrary(r.Site.From), doc: "the method is library code: a framework assembly (signed with a Microsoft key), or a well-known library's namespace")
             .Estimate(100, 50));
 
         s.Db.Register(new Table<Decoded>("decoded_fields",
@@ -95,16 +97,7 @@ public static class TriageTables
             .Estimate(10, 1));
     }
 
-    static readonly string[] LibraryNamespaces = ["System.", "Microsoft.", "Newtonsoft.", "Org.BouncyCastle", "Google.Protobuf", "MessagePack",
-        "Costura", "ICSharpCode.", "Mono.", "NAudio", "AForge", "Ionic.", "SharpCompress", "Renci.", "ProtoBuf", "Dapper", "SQLite", "AsyncIO", "NetMQ"];
-
-    internal static bool IsLibrary(MethodDef m)
-    {
-        var t = m.DeclaringType;
-        while (t?.DeclaringType != null) t = t.DeclaringType;
-        var ns = t?.Namespace.String ?? "";
-        return LibraryNamespaces.Any(p => ns.StartsWith(p, StringComparison.Ordinal) || ns == p.TrimEnd('.'));
-    }
+    internal static bool IsLibrary(MethodDef m) => Libraries.IsLibrary(m);
 
     static bool TryBody(MethodDef m, out IList<Instruction> ins)
     {
@@ -140,6 +133,10 @@ public static class TriageTables
                         else if (Prev(ins, i) is var k and >= 0 && ins[k].OpCode.Code == Code.Call && ins[k].Operand is IMethod g
                                  && ProtectionTables.Getter(g, fold.Getters) is { } got)
                             yield return new FieldInit(m, f, ctor, ins[i].Offset, KindOf(got.Value), got.Value, "getter");
+                        // arithmetic on constants (X = 0x1234 ^ 0x5678), as obfuscators write a literal
+                        else if (IlArgs.Starts(ins, i, 1) is { } value && IlArgs.Single(ins, value[0], value[1]) < 0
+                                 && ProtectionTables.Argument(ins, value[0], value[1], null) is { Value: { } folded })
+                            yield return new FieldInit(m, f, ctor, ins[i].Offset, KindOf(folded), folded, "folded");
                     }
             }
     }
@@ -354,13 +351,7 @@ public static class TriageTables
     // A sample method that only passes its arguments on to the named method (a proxy call).
     static bool ForwardsTo(IMethod m, string name)
     {
-        try
-        {
-            if (m.ResolveMethodDef() is not { IsStatic: true } d || !TryBody(d, out var ins)) return false;
-            var real = ins.Where(x => x.OpCode.Code != Code.Nop).ToList();
-            return real.Count is >= 2 and <= 8 && real[^1].OpCode.Code == Code.Ret && real[^2].OpCode.Code == Code.Call
-                   && real[^2].Operand is IMethod t && t.Name == name && real.Take(real.Count - 2).All(x => x.IsLdarg());
-        }
+        try { return m.ResolveMethodDef() is { } d && CodeIndex.Forward(d)?.Name == name; }
         catch (Exception) { return false; }
     }
 
@@ -375,113 +366,37 @@ public static class TriageTables
 
     // ---- capabilities ------------------------------------------------------------------------------------------------
 
-    // Calls, by the start of the callee's full name (Namespace.Type::Method(...)).
-    static readonly (string Kind, string Prefix)[] CallRules =
-    [
-        ("in-memory loading", "System.Reflection.Assembly::Load(System.Byte[]"),
-        ("in-memory loading", "System.AppDomain::Load(System.Byte[]"),
-        ("in-memory loading", "System.Reflection.Assembly::get_EntryPoint("),
-        ("assembly loading", "System.Reflection.Assembly::LoadFile("),
-        ("assembly loading", "System.Reflection.Assembly::LoadFrom("),
-        ("download", "System.Net.WebClient::DownloadData"),
-        ("download", "System.Net.WebClient::DownloadFile"),
-        ("download", "System.Net.WebClient::DownloadString"),
-        ("download", "System.Net.Http.HttpClient::GetByteArrayAsync("),
-        ("download", "System.Net.Http.HttpClient::GetStringAsync("),
-        ("download", "System.Net.Http.HttpClient::GetStreamAsync("),
-        ("http", "System.Net.WebRequest::Create("),
-        ("http", "System.Net.Http.HttpClient::PostAsync("),
-        ("http", "System.Net.Http.HttpClient::SendAsync("),
-        ("upload", "System.Net.WebClient::Upload"),
-        ("execute", "System.Diagnostics.Process::Start("),
-        ("tcp connection", "System.Net.Sockets.TcpClient::Connect("),
-        ("tcp connection", "System.Net.Sockets.TcpClient::ConnectAsync("),
-        ("tcp connection", "System.Net.Sockets.Socket::Connect("),
-        ("tcp connection", "System.Net.Sockets.Socket::ConnectAsync("),
-        ("tls", "System.Net.Security.SslStream::AuthenticateAsClient"),
-        ("registry write", "Microsoft.Win32.RegistryKey::SetValue("),
-        ("registry write", "Microsoft.Win32.Registry::SetValue("),
-        ("screen capture", "System.Drawing.Graphics::CopyFromScreen("),
-        ("clipboard", "System.Windows.Forms.Clipboard::GetText("),
-        ("clipboard", "System.Windows.Forms.Clipboard::SetText("),
-        ("wmi", "System.Management.ManagementObjectSearcher::.ctor("),
-        ("crypto", "System.Security.Cryptography.CryptoStream::.ctor("),
-        ("dynamic api resolution", "System.Runtime.InteropServices.Marshal::GetDelegateForFunctionPointer"),
-        ("dynamic code", "System.CodeDom.Compiler.CodeDomProvider::CompileAssemblyFrom"),
-        ("dynamic code", "Microsoft.VisualBasic.VBCodeProvider::"),
-        ("call by name", "Microsoft.VisualBasic.Interaction::CallByName("),
-        ("call by name", "Microsoft.VisualBasic.CompilerServices.NewLateBinding::LateCall("),
-        ("call by name", "Microsoft.VisualBasic.CompilerServices.NewLateBinding::LateGet("),
-        ("call by name", "System.Type::InvokeMember("),
-        ("process enumeration", "System.Diagnostics.Process::GetProcesses("),
-        ("process termination", "System.Diagnostics.Process::Kill("),
-        ("environment", "System.Environment::get_MachineName("),
-        ("environment", "System.Environment::get_UserName("),
-        ("dynamic code", "System.Reflection.Emit."),
-        ("dynamic code", "Microsoft.CSharp.CSharpCodeProvider::"),
-        ("single instance", "System.Threading.Mutex::.ctor("),
-        ("single instance", "System.Threading.Mutex::OpenExisting("),
-        ("single instance", "System.Threading.Mutex::TryOpenExisting("),
-        ("drive enumeration", "System.IO.DriveInfo::GetDrives("),
-        // the common capture libraries' entry points (DirectShow and wave-in wrappers)
-        ("webcam", "AForge.Video.DirectShow.VideoCaptureDevice::.ctor("),
-        ("webcam", "AForge.Video.DirectShow.FilterInfoCollection::.ctor("),
-        ("audio capture", "NAudio.Wave.WaveInEvent::StartRecording("),
-        ("audio capture", "NAudio.Wave.WaveIn::StartRecording("),
-    ];
+    // The labels capabilities puts on calls, imports and strings, from Rules/capabilities.json (one reviewable list; the
+    // facts are call_edges and pinvokes): calls by the start of the callee's full name (Namespace.Type::Method(...)),
+    // P/Invokes by entry point (also when resolved by name), strings by a fragment (compared case-insensitively).
+    sealed record Rules((string Kind, string Prefix)[] Calls, (string Kind, string[] Names)[] Imports, (string Kind, string[] Fragments)[] Strings);
 
-    // P/Invokes, by the entry point's name (also when resolved through GetProcAddress or reflection).
-    static readonly (string Kind, string[] Names)[] ImportRules =
-    [
-        ("process injection", ["VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread", "NtWriteVirtualMemory", "ZwWriteVirtualMemory",
-                               "QueueUserAPC", "NtQueueApcThread", "RtlCreateUserThread", "NtCreateThreadEx"]),
-        ("process hollowing", ["NtUnmapViewOfSection", "ZwUnmapViewOfSection", "SetThreadContext", "Wow64SetThreadContext", "GetThreadContext",
-                               "Wow64GetThreadContext", "ResumeThread", "CreateProcessA", "CreateProcessW", "CreateProcess"]),
-        ("keylogging", ["SetWindowsHookEx", "SetWindowsHookExA", "SetWindowsHookExW", "GetAsyncKeyState", "GetKeyboardState"]),
-        ("screen capture", ["BitBlt", "PrintWindow"]),
-        ("privileges", ["AdjustTokenPrivileges", "RtlAdjustPrivilege"]),
-        ("critical process", ["RtlSetProcessIsCritical", "NtSetInformationProcess"]),
-        ("shellcode execution", ["CreateThread"]),
-        ("window hiding", ["ShowWindow", "GetConsoleWindow"]),
-        ("dynamic api resolution", ["GetProcAddress", "LoadLibrary", "LoadLibraryA", "LoadLibraryW"]),
-        ("webcam", ["capCreateCaptureWindowA", "capCreateCaptureWindowW", "capCreateCaptureWindow", "capGetDriverDescriptionA",
-                    "capGetDriverDescriptionW"]),
-        ("audio capture", ["waveInOpen", "waveInStart", "waveInAddBuffer", "mciSendString", "mciSendStringA", "mciSendStringW"]),
-    ];
+    static readonly Lazy<Rules> CapabilityRules = new(() =>
+    {
+        using var stream = typeof(TriageTables).Assembly.GetManifestResourceStream("DnSpySql.Rules.capabilities.json")
+                           ?? throw new InvalidOperationException("Rules/capabilities.json is not embedded");
+        using var doc = System.Text.Json.JsonDocument.Parse(stream);
+        var root = doc.RootElement;
+        static string[] Strings(System.Text.Json.JsonElement a) => a.EnumerateArray().Select(x => x.GetString()!).ToArray();
+        return new Rules(
+            root.GetProperty("calls").EnumerateArray().Select(r => (r[0].GetString()!, r[1].GetString()!)).ToArray(),
+            root.GetProperty("imports").EnumerateObject().Select(p => (p.Name, Strings(p.Value))).ToArray(),
+            root.GetProperty("strings").EnumerateObject().Select(p => (p.Name, Strings(p.Value))).ToArray());
+    });
 
-    // Strings, by a fragment (compared case-insensitively).
-    static readonly (string Kind, string[] Fragments)[] StringRules =
-    [
-        ("persistence", [@"currentversion\run", @"currentversion\winlogon", "schtasks", @"\start menu\programs\startup", "userinit"]),
-        ("self-deletion", ["choice /c y /n /d y /t", "/c del ", "& del ", "&& del "]),
-        ("credential theft", ["login data", "logins.json", @"\local state", "cookies.sqlite", "wallet.dat", @"\telegram desktop", @"local storage\leveldb",
-                              "filezilla", @"\exodus\", "electrum", "metamask", @"\.purple\accounts.xml", "web data"]),
-        ("defense tampering", ["set-mppreference", "add-mppreference", "exclusionpath", "disableantispyware", "disablerealtimemonitoring", "netsh advfirewall",
-                               "amsiscanbuffer", "amsiinitialize", "amsi.dll", "etweventwrite", "ntracecontrol"]),
-        ("uac bypass", ["fodhelper", "computerdefaults", @"ms-settings\shell\open\command", "eventvwr", "sdclt"]),
-        ("recovery inhibition", ["vssadmin delete shadows", "shadowcopy delete", "recoveryenabled no", "wbadmin delete catalog"]),
-        ("hosts file tampering", [@"drivers\etc\hosts"]),
-        ("removable drive spreading", ["autorun.inf", "[autorun]"]),
-    ];
+    static (string Kind, string Prefix)[] CallRules => CapabilityRules.Value.Calls;
+    static (string Kind, string[] Names)[] ImportRules => CapabilityRules.Value.Imports;
+    static (string Kind, string[] Fragments)[] StringRules => CapabilityRules.Value.Strings;
 
     // A call made through a proxy (a static method that only passes its arguments on, which obfuscators put in front
-    // of every API) is reported where the proxy is called, the code that means it; up to three proxies deep.
-    internal static IEnumerable<Capability> Capabilities(Session s, LoadedModule m) => CapabilitiesAt(s, m).SelectMany(c => ThroughProxies(s, c, 0));
-
-    static IEnumerable<Capability> ThroughProxies(Session s, Capability c, int depth)
-    {
-        var from = c.Site.From;
-        var callers = depth < 3 && ProtectionTables.IsThunk(from) ? s.Index.To(c.M.H(from)).Where(x => x.IsCall).ToList() : [];
-        if (callers.Count == 0) { yield return c; yield break; }
-        foreach (var site in callers)
-            foreach (var r in ThroughProxies(s, c with { Site = site, Evidence = $"{c.Evidence} (through proxy {from.Name})" }, depth + 1))
-                yield return r;
-    }
-
-    static IEnumerable<Capability> CapabilitiesAt(Session s, LoadedModule m)
+    // of every API) is reported where the proxy is called, the code that means it, with the API the index found behind
+    // the proxies (XRef.Target, up to three deep); the call inside a proxy that has callers is not reported again.
+    internal static IEnumerable<Capability> Capabilities(Session s, LoadedModule m)
     {
         var ix = s.Index;
         var imports = ImportRules.SelectMany(r => r.Names.Select(n => (n, r.Kind))).ToDictionary(x => x.n, x => x.Kind, StringComparer.OrdinalIgnoreCase);
+        var proxies = new Dictionary<MethodDef, bool>();
+        bool CalledProxy(MethodDef f) => proxies.TryGetValue(f, out var p) ? p : proxies[f] = CodeIndex.Forward(f) != null && ix.To(m.H(f)).Any(c => c.IsCall);
         foreach (var x in ix.All.Where(x => x.M == m))
         {
             if (x.Kind == "string" && x.StringValue is { Length: >= 4 } str)
@@ -490,50 +405,40 @@ public static class TriageTables
                 foreach (var (kind, fragments) in StringRules)
                     if (fragments.FirstOrDefault(f => lower.Contains(f, StringComparison.Ordinal)) is { } hit)
                     {
-                        yield return new Capability(m, kind, hit, x, "string \"" + Clip(str) + "\"");
+                        yield return new Capability(m, kind, hit, x, "string \"" + Clip(str) + "\"", "string");
                         break;
                     }
                 continue;
             }
-            if (!x.IsCall) continue;
-            var callee = x.ToName;
+            if (!x.IsCall || x.Proxies == 0 && CalledProxy(x.From)) continue;
+            var callee = x.TargetName;
             int sep = callee.IndexOf(' ');
             var name = sep >= 0 ? callee[(sep + 1)..] : callee; // without the return type
-            var pinvoke = (x.Def as MethodDef)?.ImplMap;
+            var through = x.Proxies > 0 ? $" (through proxy {(x.Def as MethodDef)?.Name})" : "";
+            var pinvoke = (x.TargetDef as MethodDef)?.ImplMap;
             if (pinvoke != null && imports.TryGetValue(pinvoke.Name.String, out var ik))
-                yield return new Capability(m, ik, pinvoke.Name.String, x, $"P/Invoke {pinvoke.Module?.Name}!{pinvoke.Name}");
+                yield return new Capability(m, ik, pinvoke.Name.String, x, $"P/Invoke {pinvoke.Module?.Name}!{pinvoke.Name}{through}", "import");
             else if (CallRules.FirstOrDefault(r => name.StartsWith(r.Prefix, StringComparison.Ordinal)) is { Kind: { } ck } rule)
-                yield return new Capability(m, ck, rule.Prefix.TrimEnd('('), x, "calls " + Clip(name, 120));
+                yield return new Capability(m, ck, rule.Prefix.TrimEnd('('), x, "calls " + Clip(name, 120) + through, "api");
             // an API looked up by name: GetProcAddress(h, "VirtualAllocEx") (P/Invoked, so by its entry point, or a
-            // managed wrapper), type.GetMethod("Load")
+            // managed wrapper), type.GetMethod("Load"); a proxy passes the arguments on as they are
             if ((pinvoke?.Name.String == "GetProcAddress" || name.Contains("::GetProcAddress(", StringComparison.Ordinal)
                  || name.StartsWith("System.Type::GetMethod(", StringComparison.Ordinal))
                 && NameArgument(x) is { } api && imports.TryGetValue(api, out var rk))
-                yield return new Capability(m, rk, api, x, $"resolves {api} by name");
+                yield return new Capability(m, rk, api, x, $"resolves {api} by name{through}", "resolved by name");
             // an API name handed to a resolver wrapper: LoadApi<T>("kernel32", "WriteProcessMemory")
             else if (pinvoke == null && StringArguments(x).FirstOrDefault(imports.ContainsKey) is { } wrapped)
-                yield return new Capability(m, imports[wrapped], wrapped, x, $"passes \"{wrapped}\" to {Clip(name, 100)}");
+                yield return new Capability(m, imports[wrapped], wrapped, x, $"passes \"{wrapped}\" to {Clip(name, 100)}{through}", "resolved by name");
         }
     }
 
-    // The string pushed just before a call that takes the API name last (GetProcAddress, GetMethod).
-    static string? NameArgument(XRef x)
-    {
-        if (!TryBody(x.From, out var ins) || x.Index >= ins.Count) return null;
-        int k = Prev(ins, x.Index);
-        return k >= 0 && ins[k].OpCode.Code == Code.Ldstr ? ins[k].Operand as string : null;
-    }
+    // The literal a call that takes the API name last is given (GetProcAddress, GetMethod).
+    static string? NameArgument(XRef x) =>
+        TryBody(x.From, out var ins) && IlArgs.StringLiterals(ins, x.Index) is [.., var last] ? last : null;
 
-    // The string literals pushed right before a call (up to four arguments back).
-    static IEnumerable<string> StringArguments(XRef x)
-    {
-        if (!TryBody(x.From, out var ins) || x.Index >= ins.Count) yield break;
-        for (int k = Prev(ins, x.Index), n = 0; k >= 0 && n < 4; k = Prev(ins, k), n++)
-        {
-            if (ins[k].OpCode.Code == Code.Ldstr && ins[k].Operand is string str) yield return str;
-            else if (!ins[k].IsLdcI4() && ins[k].OpCode.Code != Code.Ldnull) yield break;
-        }
-    }
+    // The string literals a call is given.
+    static IEnumerable<string> StringArguments(XRef x) =>
+        TryBody(x.From, out var ins) && IlArgs.StringLiterals(ins, x.Index) is { } values ? values.OfType<string>() : [];
 
     static string Clip(string s, int max = 80) => s.Length <= max ? s : s[..max] + "…";
 }

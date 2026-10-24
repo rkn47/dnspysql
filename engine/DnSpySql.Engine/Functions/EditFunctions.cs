@@ -308,24 +308,19 @@ public static class EditFunctions
         return set;
     }
 
-    // The argument pushes of a call, found the way decryptor_calls found them (over nops and a branch to the next
-    // instruction), when the call and its arguments are one straight sequence; null when code jumps into it (past its
-    // first push), since another path then arrives with other values, or a prefix (volatile.) stands in front of it.
+    // The instructions of a call's arguments, found as decryptor_calls found them (IlArgs: constant expressions too), when
+    // the call and its arguments are one straight sequence; null when code jumps into it (past its first instruction),
+    // since another path then arrives with other values, or a prefix (volatile.) stands in front of it.
     static List<Instruction>? Clean(CilBody b, Instruction call, int n, HashSet<Instruction> targets)
     {
         var ins = b.Instructions;
         int at = ins.IndexOf(call);
-        if (at < 0 || targets.Contains(call)) return null;
-        var args = new List<Instruction>();
-        int i = at - 1;
-        for (; args.Count < n && i >= 0; i--)
-        {
-            bool filler = ins[i].OpCode.Code == Code.Nop || ins[i].OpCode.Code is Code.Br or Code.Br_S && ReferenceEquals(ins[i].Operand, ins[i + 1]);
-            if (!filler) args.Add(ins[i]);
-            if (args.Count < n && targets.Contains(ins[i])) return null; // a jump lands after the first push
-        }
-        if (args.Count < n || i >= 0 && ins[i].OpCode.OpCodeType == OpCodeType.Prefix) return null;
-        return args;
+        if (at < 0 || targets.Contains(call) || IlArgs.Starts(ins, at, n) is not { } starts) return null;
+        int first = starts[0];
+        for (int i = first + 1; i < at; i++)
+            if (targets.Contains(ins[i])) return null; // a jump lands after the first instruction
+        if (first > 0 && ins[first - 1].OpCode.OpCodeType == OpCodeType.Prefix) return null;
+        return ins.Skip(first).Take(at - first).Where((_, k) => !IlArgs.IsFiller(ins, first + k)).ToList();
     }
 
     static Instruction Ins(CilBody b, int i) =>

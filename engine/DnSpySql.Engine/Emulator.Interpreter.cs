@@ -536,22 +536,8 @@ public sealed partial class Emulator
         }
 
         var def = DefOf(target);
-        // VirtualProtect: the copy is writable already. The old protection reported is what Windows would report for a
-        // loaded image's code: execute-read (0x20).
-        if (def?.ImplMap?.Name.String is "VirtualProtect")
-        {
-            if (a.Length == 4 && a[3] is Ref old) old.Set(0x20);
-            return 1;
-        }
-        // anti-debug checks get the answer of a process without a debugger
-        switch (def?.ImplMap?.Name.String)
-        {
-            case "CheckRemoteDebuggerPresent":
-                if (a.Length == 2 && a[1] is Ref present) present.Set(0);
-                return 1;
-            case "IsDebuggerPresent":
-                return 0;
-        }
+        // a P/Invoke the environment model answers (VirtualProtect, anti-debug checks: Emulator.Environment.cs)
+        if (def?.ImplMap is { } map && AnsweredNative(map.Name.String, caller, a, out var native)) return native;
         if (def != null && Sample(def.DeclaringType))
         {
             if (op == Code.Newobj)
@@ -821,7 +807,8 @@ public sealed partial class Emulator
 
     // ---- arithmetic ----------------------------------------------------------------------------------------------------
 
-    static object Arith(Code op, object? a, object? b)
+    // (also IlArgs' constant folding of call arguments)
+    internal static object Arith(Code op, object? a, object? b)
     {
         try
         {
@@ -880,7 +867,7 @@ public sealed partial class Emulator
 
     static double Num(object? v) => v switch { int i => i, long l => l, double d => d, _ => throw Bad("arithmetic", v) };
 
-    static object Conv(Code op, object? v)
+    internal static object Conv(Code op, object? v)
     {
         if (v is null or Ref or Obj or string or Array) throw Bad("conversion", v);
         bool ovf = op.ToString().Contains("Ovf");

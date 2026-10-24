@@ -221,31 +221,62 @@ public sealed class Session : IDisposable
     public sealed class RuntimeSetting
     {
         public required string Key { get; init; }
+        /// <summary>int | bool | string: what a new value is checked and normalized as (bools are stored as 1 or 0).</summary>
         public required string Type { get; init; }
         public required string Doc { get; init; }
         public bool Settable { get; init; } = true;
         public string? Value { get; set; }
+        /// <summary>
+        /// What a new value does to the session, given the normalized value and the current one; returns the value to
+        /// store (a setting can refuse with a SqlException, or keep a different value). Null: the value is only stored.
+        /// </summary>
+        public Func<string?, string?, string?>? Apply { get; init; }
         public long? AsLong => Values.ParseLong(Value ?? "");
         public bool AsBool => Value is "1" or "true" or "on" or "yes";
+
+        /// <summary>The value as this setting's type has it, or a SqlException that says what is expected.</summary>
+        public string? Normalize(string? value) => Type switch
+        {
+            "int" => Values.ParseLong(value ?? "") is { } n ? n.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                                                         : throw new SqlException($"setting '{Key}' needs an integer"),
+            "bool" => value?.ToLowerInvariant() switch
+            {
+                "1" or "true" or "on" or "yes" => "1",
+                "0" or "false" or "off" or "no" => "0",
+                _ => throw new SqlException($"setting '{Key}' needs 1 or 0"),
+            },
+            _ => value,
+        };
     }
 
     void InitSettings()
     {
-        void Add(string key, string type, string value, string doc, bool settable = true) =>
-            Settings[key] = new RuntimeSetting { Key = key, Type = type, Value = value, Doc = doc, Settable = settable };
+        void Add(string key, string type, string value, string doc, Func<string?, string?, string?>? apply = null, bool settable = true) =>
+            Settings[key] = new RuntimeSetting { Key = key, Type = type, Value = value, Doc = doc, Settable = settable, Apply = apply };
+        static int Int(string? v) => (int)Math.Clamp(Values.ParseLong(v!)!.Value, int.MinValue, int.MaxValue);
         Add("query_timeout_ms", "int", Options.QueryTimeoutMs.ToString(), "per-statement timeout in milliseconds (0 = none)");
         Add("max_rows", "int", Options.MaxRows.ToString(),
             "row cap per statement for CLI/HTTP/MCP output, on top of each front end's own (the CLI's --max-rows default, " +
             "the max_rows of an MCP or HTTP request): the smaller one applies; 0 = no cap of the session's own");
-        Add("current_module", "int", "1", "module used when a bare metadata token is given");
+        Add("current_module", "int", "1", "module used when a bare metadata token is given",
+            (v, _) => { Ws.Get(Int(v)); Ws.CurrentModuleId = Int(v); return v; });
         Add("decompiler_language", "string", "csharp", "default language for pseudocode/decompile(): csharp | vb | il");
         Add("decompiler_show_tokens", "bool", "0", "emit metadata token comments in IL text");
         Add("search_include_compiler_generated", "bool", "0", "search/jump_entities: include compiler-generated members");
         Add("save_preserve_tokens", "bool", "1", "save(): keep all metadata tokens/RIDs (dnSpy 'Preserve All')");
         Add("save_strip_ready_to_run", "bool", "1",
-            "save(): write edited ReadyToRun images as IL-only (otherwise the runtime may keep running the precompiled native code and ignore IL edits)");
+            "save(): write edited ReadyToRun images as IL-only (otherwise the runtime may keep running the precompiled native code and ignore IL edits)",
+            (v, _) => { Ws.StripReadyToRun = v == "1"; return v; });
         Add("reference_paths", "string", string.Join(Path.PathSeparator, Options.ReferencePaths),
-            $"extra directories with referenced assemblies, separated by '{Path.PathSeparator}' (e.g. .NET Framework reference assemblies on Linux)");
+            $"extra directories with referenced assemblies, separated by '{Path.PathSeparator}' (e.g. .NET Framework reference assemblies on Linux)",
+            (v, _) =>
+            {
+                var dirs = (v ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                foreach (var d in dirs) if (!Directory.Exists(d)) throw new SqlException($"reference path does not exist: {d}");
+                Ws.SetUserReferencePaths(dirs);
+                Index.Invalidate();
+                return v;
+            });
         Add("save_sidecars", "bool", "1",
             "save(): also write <file>.xml (comments and tags as XML documentation, which dnSpyEx shows as /// comments) and " +
             "<file>.dnspysql.json (the annotations), and point dnSpy exports at the saved file");
@@ -254,57 +285,35 @@ public sealed class Session : IDisposable
             "exception settings: auto (dnSpyEx's choice: bin\\dnSpy.xml of a running dnSpy when it exists, else " +
             "%APPDATA%\\dnSpy\\dnSpy.xml; Windows only), off, or a path. SELECT dnspy_sync() syncs now");
         Add("max_modules", "int", "0",
-            "most modules open at once (0 = no limit): opening one more is refused with a reminder to close() the samples you are done with");
+            "most modules open at once (0 = no limit): opening one more is refused with a reminder to close() the samples you are done with",
+            (v, _) => { Ws.MaxModules = Math.Max(0, Int(v)); return v; });
         Add("emulation", "bool", Options.NoEmulation ? "0" : "1",
             "interpret IL (never run it): emulate(), decryptor_calls.plaintext, decoded_fields, inline_strings and untamper() (--no-emulation). " +
-            "0: metadata, IL, decompiled code and the other static tables only; those say emulation is off");
+            "0: metadata, IL, decompiled code and the other static tables only; those say emulation is off",
+            (v, old) =>
+            {
+                // what was interpreted (or refused) under the other value is not kept
+                if (v != old) { Emulator.Reset(this); EmulationEpoch++; }
+                return v;
+            });
         Add("read_only", "bool", Options.ReadOnly ? "1" : "0",
-            "session refuses writes (--readonly); can be switched on, never off: set it to 1 to lock a session for analysis only");
+            "session refuses writes (--readonly); can be switched on, never off: set it to 1 to lock a session for analysis only",
+            (v, _) =>
+            {
+                // one way: a server registered without --readonly can be locked for an analysis-only task, and a session that
+                // was promised read-only (by the user, or by an earlier statement) cannot be unlocked by a later one
+                if (v != "1" && Db.ReadOnly) throw new SqlException("read_only can only be switched on; restart without --readonly to write");
+                Db.ReadOnly |= v == "1";
+                return Db.ReadOnly ? "1" : "0";
+            });
     }
 
     public void SetSetting(string key, string? value)
     {
         if (!Settings.TryGetValue(key, out var s)) throw new SqlException($"unknown setting '{key}'");
         if (!s.Settable) throw new SqlException($"setting '{key}' is read-only");
-        if (s.Type == "int" && Values.ParseLong(value ?? "") is null) throw new SqlException($"setting '{key}' needs an integer");
-        if (s.Type == "bool")
-            value = value?.ToLowerInvariant() switch
-            {
-                "1" or "true" or "on" or "yes" => "1",
-                "0" or "false" or "off" or "no" => "0",
-                _ => throw new SqlException($"setting '{key}' needs 1 or 0"),
-            };
-        if (key == "emulation" && value != s.Value)
-        {
-            // what was interpreted (or refused) under the other value is not kept
-            Emulator.Reset(this);
-            EmulationEpoch++;
-        }
-        if (key == "read_only")
-        {
-            // one way: a server registered without --readonly can be locked for an analysis-only task, and a session that
-            // was promised read-only (by the user, or by an earlier statement) cannot be unlocked by a later one
-            bool on = value == "1";
-            if (!on && Db.ReadOnly) throw new SqlException("read_only can only be switched on; restart without --readonly to write");
-            Db.ReadOnly |= on;
-            value = Db.ReadOnly ? "1" : "0";
-        }
-        if (key == "current_module")
-        {
-            var id = (int)Values.ParseLong(value!)!.Value;
-            Ws.Get(id);
-            Ws.CurrentModuleId = id;
-        }
-        if (key == "save_strip_ready_to_run") Ws.StripReadyToRun = value == "1";
-        if (key == "max_modules") Ws.MaxModules = (int)Math.Clamp(Values.ParseLong(value!)!.Value, 0, int.MaxValue);
-        if (key == "reference_paths")
-        {
-            var dirs = (value ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            foreach (var d in dirs) if (!Directory.Exists(d)) throw new SqlException($"reference path does not exist: {d}");
-            Ws.SetUserReferencePaths(dirs);
-            Index.Invalidate();
-        }
-        s.Value = value;
+        var v = s.Normalize(value);
+        s.Value = s.Apply is { } apply ? apply(v, s.Value) : v;
     }
 
     public void Dispose() => Ws.Dispose();

@@ -82,6 +82,16 @@ public sealed class ModuleBreakpointRec
     public int? Order { get; set; }
     public string? AppDomainName { get; set; }
     public string? ProcessName { get; set; }
+
+    /// <summary>
+    /// The same breakpoint: every condition equal (names as file names compare, without case). What bp_module, a second
+    /// import and an export's merge use to tell one module breakpoint from another.
+    /// </summary>
+    public bool SameTarget(ModuleBreakpointRec o) =>
+        string.Equals(ModuleName ?? "", o.ModuleName ?? "", StringComparison.OrdinalIgnoreCase) && IsDynamic == o.IsDynamic
+        && IsInMemory == o.IsInMemory && IsLoaded == o.IsLoaded && Order == o.Order
+        && string.Equals(AppDomainName ?? "", o.AppDomainName ?? "", StringComparison.OrdinalIgnoreCase)
+        && string.Equals(ProcessName ?? "", o.ProcessName ?? "", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>dnSpy exception setting (Exception Settings window): break on first/second chance, with module conditions.</summary>

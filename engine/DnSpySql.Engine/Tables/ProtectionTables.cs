@@ -99,9 +99,10 @@ public static class ProtectionTables
             .Estimate(20, 50));
 
         s.Db.Register(new Table<Decryptor>("string_decryptors",
-                "Methods shaped like a string decryptor: static, return a string (or object, or a generic T), take literal arguments " +
-                "(constants, strings, null, or calls to getters that return a constant) at many call sites. Ranked " +
-                "by score; trace one in dnSpy (bp_trace on the callers' next instruction, or on its ret) to see the plaintext") { Domain = "triage" }
+                "Methods shaped like a decryptor of constants: static, return a string (or object, or a generic T), a number or a " +
+                "byte array (return_type), take constant arguments (literals, arithmetic on them, calls to getters that return a " +
+                "constant) at many call sites. Ranked by score; trace one in dnSpy (bp_trace on the callers' next instruction, or on " +
+                "its ret) to see the plaintext") { Domain = "triage" }
             .Source(c => ws.Modules(c).SelectMany(m => Decryptors(s, m, (int)(c.Long("min_sites") ?? 5),
                 double.TryParse(c.Text("min_literal_share"), System.Globalization.CultureInfo.InvariantCulture, out var share) ? share : 0.5)))
             .Int("module", d => d.M.Id, pushdown: Pushdown.Eq)
@@ -112,9 +113,10 @@ public static class ProtectionTables
             .Int("constant_sites", d => d.ConstantSites, doc: "call sites whose arguments are all literals")
             .Real("score", d => d.Score, doc: "literal call sites weighted by their share of all call sites")
             .Text("sample_args", d => string.Join("; ", d.Samples), doc: "a few literal arguments from call sites")
-            .Bool("is_library", d => TriageTables.IsLibrary(d.Method), doc: "the method belongs to a well-known library namespace")
+            .Bool("is_library", d => TriageTables.IsLibrary(d.Method), doc: "the method is library code: a framework assembly (signed with a Microsoft key), or a well-known library's namespace")
             .Arg("min_sites", SqlType.Integer, _ => null, required: false, doc: "minimum call sites (default 5)")
             .Arg("min_literal_share", SqlType.Real, _ => null, required: false, doc: "minimum share of call sites with literal arguments (default 0.5; 0 lists every candidate)")
+            .Text("return_type", d => d.Method.MethodSig?.RetType?.FullName, doc: "System.String, System.Object or !!0 for strings; a number or byte array type otherwise")
             .Estimate(20, 50));
 
         s.Db.Register(new Table<DecryptorCall>("decryptor_calls",
@@ -136,13 +138,14 @@ public static class ProtectionTables
             .Col("plaintext", SqlType.Any, d => d.Plain.Value.Value,
                 doc: "what the call returns, computed by interpreting the decryptor's IL (the sample is never run); NULL when it cannot be")
             .Text("emulation", d => d.Plain.Value.Status, doc: "ok, or why the decryptor could not be interpreted")
-            .Bool("is_library", d => TriageTables.IsLibrary(d.Decryptor), doc: "the decryptor belongs to a well-known library namespace")
+            .Bool("is_library", d => TriageTables.IsLibrary(d.Decryptor), doc: "the decryptor is library code: a framework assembly (signed with a Microsoft key), or a well-known library's namespace")
             .Text("plaintext_kind", d => TriageTables.ValueKind(d.Plain.Value.Value),
                 doc: "text | base64 text | ciphertext (base64 of bytes that are not text: a second layer, decrypted by another method) | binary")
             .Text("args_from", d => d.Args.Any(a => a.FromField) ? "field" : "literal",
                 doc: "literal, or field: an argument is a static field's value (a literal it holds, a decoder's result from decoded_fields, " +
                      "or what a decryptor computed into it)")
             .Arg("min_sites", SqlType.Integer, _ => null, required: false, doc: "minimum call sites of a decryptor (default 5)")
+            .Text("return_type", d => d.Decryptor.MethodSig?.RetType?.FullName, doc: "what the decryptor returns: a string, a number or a byte array")
             .Estimate(500, 50));
     }
 
@@ -258,7 +261,7 @@ public static class ProtectionTables
             found.Add(new Finding(m, "anti-vm / anti-analysis", "anti-vm", vm.Count >= 4 ? "high" : "medium", "strings mention " + string.Join(", ", vm)));
 
         // string encryption
-        var dec = Decryptors(s, m, 20).FirstOrDefault(d => !TriageTables.IsLibrary(d.Method));
+        var dec = Decryptors(s, m, 20).FirstOrDefault(d => !TriageTables.IsLibrary(d.Method) && ReturnsText(d.Method));
         if (dec != null && dec.ConstantRatio >= 0.5)
             found.Add(new Finding(m, "string encryption", "string encryption", dec.Sites >= 50 ? "high" : "medium",
                 $"{dec.Method.FullName} is called from {dec.Sites} sites, {dec.ConstantSites} with literal arguments (string_decryptors)", m.H(dec.Method)));
@@ -858,27 +861,27 @@ public static class ProtectionTables
         static bool IsConstant(Instruction x) => x.IsLdcI4() || x.OpCode.Code is Code.Ldc_I8;
     }
 
-    internal static bool IsThunk(MethodDef m)
-    {
-        if (!m.IsStatic || !TryBody(m, out var ins) || ins.Count < 2 || ins.Count > 8) return false;
-        if (ins[^1].OpCode.Code != Code.Ret || ins[^2].OpCode.Code is not (Code.Call or Code.Callvirt or Code.Newobj)) return false;
-        for (int i = 0; i < ins.Count - 2; i++)
-            if (!ins[i].IsLdarg()) return false;
-        return ins[^2].Operand is IMethod target && target.Name != m.Name;
-    }
+    internal static bool IsThunk(MethodDef m) => CodeIndex.Forward(m) != null;
 
     // ---- string decryptors -------------------------------------------------------------------------------------------
 
-    // Decryptor-shaped: static, returns a string (or object, or a generic T: T x<T>(int)), 1-4 parameters of
-    // which at least one is an integer or a string (the key). A library helper taking only objects is not one.
+    // Decryptor-shaped: static, returns a constant's type (a string, or object, or a generic T: T x<T>(int); a number;
+    // a byte or char array), 1-4 parameters of which at least one is an integer or a string (the key). A library helper
+    // taking only objects is not one, nor one returning a bool (a check, not a value).
     static bool Shaped(MethodDef meth)
     {
         var sig = meth.MethodSig;
         if (!meth.IsStatic || sig == null || sig.Params.Count is < 1 or > 4) return false;
-        if (sig.RetType?.ElementType is not (ElementType.String or ElementType.Object or ElementType.MVar or ElementType.Var)) return false;
+        if (!ReturnsText(meth) && sig.RetType?.ElementType is not (ElementType.I1 or ElementType.U1 or ElementType.I2 or ElementType.U2 or ElementType.I4
+                or ElementType.U4 or ElementType.I8 or ElementType.U8 or ElementType.R4 or ElementType.R8 or ElementType.Char)
+            && sig.RetType is not SZArraySig { Next.ElementType: ElementType.U1 or ElementType.Char }) return false;
         return sig.Params.Any(p => p?.ElementType is ElementType.I4 or ElementType.U4 or ElementType.I8 or ElementType.U8 or ElementType.I2
                                    or ElementType.U2 or ElementType.I1 or ElementType.U1 or ElementType.String);
     }
+
+    /// <summary>A decryptor of strings: it returns a string, an object or a generic T (what string encryption is told by).</summary>
+    internal static bool ReturnsText(MethodDef m) =>
+        m.MethodSig?.RetType?.ElementType is ElementType.String or ElementType.Object or ElementType.MVar or ElementType.Var;
 
     // interpret: arguments read from fields count as constant when the field's value can be interpreted too (what its
     // static constructor or decoder leaves); only decryptor_calls asks for that, the ranking alone stays static
@@ -954,26 +957,42 @@ public static class ProtectionTables
         public readonly Dictionary<FieldDef, Lit?> Fields = new();
     }
 
-    // The n arguments pushed right before the call, all literals, or null. Steps back over nops and over a branch to the
-    // very next instruction (obfuscators insert one between the ldc and the call). Only a call passes arguments: what
-    // precedes an ldftn (a delegate's target object) is not one.
+    // The n arguments of the call, all constant, or null (IlArgs finds them, also over the nops and branches to the next
+    // instruction obfuscators insert). Only a call passes arguments: what precedes an ldftn (a delegate's target object)
+    // is not one.
     static List<Lit>? Arguments(XRef x, int n, Fold fold) =>
         x.Kind is "call" or "callvirt" && TryBody(x.From, out var ins) && x.Index < ins.Count ? ArgumentsAt(ins, x.Index, n, fold) : null;
 
     internal static List<Lit>? ArgumentsAt(IList<Instruction> ins, int at, int n, Fold fold)
     {
+        if (IlArgs.Starts(ins, at, n) is not { } starts) return null;
         var args = new List<Lit>(n);
-        for (int i = at - 1; args.Count < n; i--)
+        for (int k = 0; k < n; k++)
         {
-            while (i >= 0 && (ins[i].OpCode.Code == Code.Nop
-                              || ins[i].OpCode.Code is Code.Br or Code.Br_S && i + 1 < ins.Count && ReferenceEquals(ins[i].Operand, ins[i + 1])))
-                i--;
-            if (i < 0 || Literal(ins[i], fold) is not { } v) return null;
+            if (Argument(ins, starts[k], starts[k + 1], fold) is not { } v) return null;
             args.Add(v);
         }
-        args.Reverse();
         return args;
     }
+
+    /// <summary>
+    /// One value the instructions from start to end push: a literal (or a field or getter holding one), or arithmetic on
+    /// constants, folded to its value (ldc 0x1234; ldc 0x5678; xor is 0x444C).
+    /// </summary>
+    internal static Lit? Argument(IList<Instruction> ins, int start, int end, Fold? fold)
+    {
+        if (IlArgs.Single(ins, start, end) is var one and >= 0) return Literal(ins[one], fold);
+        if (!IlArgs.TryFold(ins, start, end, x => Leaf(x, fold), out var v)) return null;
+        var value = v is int i ? (long)i : v;
+        return new Lit(Shown(value), value);
+    }
+
+    // a constant as the interpreter's stack holds it (int32 as int), for folding
+    static (bool, object?) Leaf(Instruction x, Fold? fold) =>
+        x.IsLdcI4() ? (true, x.GetLdcI4Value())
+        : x.OpCode.Code is Code.Ldc_R4 or Code.Ldc_R8 ? (true, Convert.ToDouble(x.Operand, System.Globalization.CultureInfo.InvariantCulture))
+        : Literal(x, fold) is { } l ? (true, l.Value)
+        : (false, null);
 
     internal static Lit? Literal(Instruction i, Fold? fold = null) => i.OpCode.Code switch
     {
@@ -1007,8 +1026,10 @@ public static class ProtectionTables
             {
                 if (!TryBody(w.From, out var ins) || w.Index >= ins.Count) { unexplained.Add(w.From); continue; }
                 int k = w.Index - 1;
-                while (k >= 0 && ins[k].OpCode.Code == Code.Nop) k--;
-                if (k >= 0 && ins[k].OpCode.Code != Code.Ldsfld && Literal(ins[k], fold) is { } lit)
+                while (k >= 0 && IlArgs.IsFiller(ins, k)) k--;
+                // the value stored: a literal or constant arithmetic (not a copy of another field)
+                if (k >= 0 && ins[k].OpCode.Code != Code.Ldsfld && IlArgs.Starts(ins, w.Index, 1) is { } stored
+                    && Argument(ins, stored[0], stored[1], fold) is { } lit)
                 {
                     twoLiterals |= literal != null;
                     literal = lit;
@@ -1028,8 +1049,9 @@ public static class ProtectionTables
         return fold.Fields[fd] = v;
     }
 
-    static string Shown(object v) => v switch
+    static string Shown(object? v) => v switch
     {
+        null => "null",
         string str => "\"" + (str.Length > 60 ? str[..60] + "…" : str) + "\"",
         byte[] b => $"x'{Convert.ToHexString(b.AsSpan(0, Math.Min(b.Length, 16)))}{(b.Length > 16 ? "…" : "")}'",
         _ => Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture) ?? "",
@@ -1050,7 +1072,8 @@ public static class ProtectionTables
         offset >= 0 && offset + 4 <= file.Length && file.AsSpan((int)offset, 4).IndexOfAnyExcept((byte)0) < 0;
 
     // A parameterless static method that only returns a literal, directly or through another such getter (up to three
-    // deep): some obfuscators call one in place of each literal. A Debug build's "ldstr; stloc; br; ldloc; ret" counts too.
+    // deep), or constant arithmetic: some obfuscators call one in place of each literal. A Debug build's "ldstr; stloc;
+    // br; ldloc; ret" counts too.
     internal static Lit? Getter(IMethod g, Dictionary<IMethod, Lit?> memo, int depth = 0)
     {
         if (memo.TryGetValue(g, out var v)) return v;
@@ -1063,6 +1086,10 @@ public static class ProtectionTables
                 if (real is [var a, var st, var ld, { OpCode.Code: Code.Ret }] && st.IsStloc() && ld.IsLdloc()) real = [a, real[3]];
                 if (real is [var value, { OpCode.Code: Code.Ret }])
                     v = value.OpCode.Code == Code.Call && value.Operand is IMethod next ? Getter(next, memo, depth + 1) : Literal(value);
+                // the whole body one constant expression before the ret
+                else if (ins[^1].OpCode.Code == Code.Ret && IlArgs.Starts(ins, ins.Count - 1, 1) is { } body
+                         && Enumerable.Range(0, body[0]).All(i => IlArgs.IsFiller(ins, i)))
+                    v = Argument(ins, body[0], body[1], null);
             }
         }
         catch (Exception) { v = null; } // an unresolvable reference is not a constant

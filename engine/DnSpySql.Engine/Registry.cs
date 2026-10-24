@@ -30,6 +30,7 @@ public static class Registry
         ApiDocTables.Register(s);
         ProtectionTables.Register(s);
         TriageTables.Register(s);
+        EmulatorTables.Register(s);
         GuideTables.Register(s);
 
         CoreFunctions.Register(s);

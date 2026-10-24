@@ -26,16 +26,17 @@ read the `unpack` guide, then triage each new module with `WHERE module = <id>`.
 ## 3. Behaviour and indicators
 
 ```sql
-SELECT kind, api, method_name, offset, evidence FROM capabilities WHERE NOT is_library ORDER BY kind;
+SELECT kind, api, method_name, offset, basis, evidence FROM capabilities WHERE NOT is_library ORDER BY kind;
 SELECT value, count(*) FROM string_refs WHERE kind = 'il' GROUP BY value ORDER BY length(value) DESC;  -- every literal
-SELECT src_name, dst_name, string_args FROM call_edges
-  WHERE string_args IS NOT NULL AND is_external;      -- what each framework call is given: a mutex name, a key, a URL
+SELECT src_name, target_name, string_args FROM call_edges
+  WHERE string_args IS NOT NULL AND target = 0;      -- what each framework call is given (also through proxies)
 SELECT name, content_type, text FROM resources WHERE text IS NOT NULL;
 SELECT resource, name, value FROM resource_elements WHERE type = 'String';
 ```
 
 Indicators are yours to judge: read the literals, what the calls are given, the resources and (step 4) what the code
 decrypts, and decide what is a host, a URL, a key or a name. Literal only: a value the code computes is in step 4.
+`capabilities.basis = 'string'` rows rest on a fragment of a literal (a judgment); the others on a call or an import.
 
 ## 4. Config
 

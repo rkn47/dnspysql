@@ -241,10 +241,9 @@ public static class BreakpointTables
         {
             var pattern = Str(a[0], "module_name");
             bool? onLoad = a.Length > 1 ? NB(a[1]) : true;
-            var hit = s.Store.ModuleBreakpoints.FirstOrDefault(b => string.Equals(b.ModuleName, pattern, StringComparison.OrdinalIgnoreCase) && b.IsLoaded == onLoad
-                                                                    && b.IsDynamic == null && b.IsInMemory == null && b.Order == null && b.AppDomainName == null && b.ProcessName == null);
-            if (hit != null) return hit.Id;
-            var rec = new ModuleBreakpointRec { Id = s.Store.NewId(), ModuleName = pattern, IsLoaded = onLoad };
+            var rec = new ModuleBreakpointRec { ModuleName = pattern, IsLoaded = onLoad };
+            if (s.Store.ModuleBreakpoints.FirstOrDefault(b => b.SameTarget(rec)) is { } hit) return hit.Id;
+            rec.Id = s.Store.NewId();
             s.Store.ModuleBreakpoints.Add(rec);
             s.Store.Changed();
             ListUndo(s, "module_breakpoints", s.Store.ModuleBreakpoints, rec, true);
@@ -486,8 +485,7 @@ public static class BreakpointTables
         return rec;
     }
 
-    static bool IsFramework(ModuleDef m) =>
-        m.Assembly?.PublicKeyToken?.ToString() is "b77a5c561934e089" or "b03f5f7f11d50a3a" or "31bf3856ad364e35" or "cc7b13ffcd2ddd51" or "7cec85d7bea7798e";
+    static bool IsFramework(ModuleDef m) => Libraries.IsFramework(m);
 
     static TypeDef? ExceptionType(Session s, string name)
     {

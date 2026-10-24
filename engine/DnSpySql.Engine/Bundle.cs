@@ -60,6 +60,15 @@ public static class Bundle
     {
         int at = b.AsSpan().IndexOf(Signature);
         if (at < 8 || BitConverter.ToInt64(b, at - 8) != 0 || Read("", b) != null) return null;
+        return EmbeddedAppPath(b, at) ?? "";
+    }
+
+    /// <summary>
+    /// The app path the SDK wrote into a host, next to the bundle signature at <paramref name="at"/> (a plain app host
+    /// and a single-file bundle's host both have it): "" for the SDK's unbound template, null when it is not there.
+    /// </summary>
+    static string? EmbeddedAppPath(byte[] b, int at)
+    {
         int from = Math.Max(0, at - 4096), to = Math.Min(b.Length, at + 4096);
         var window = b.AsSpan(from, to - from);
         if (window.IndexOf(EmbedPlaceholder) >= 0) return "";
@@ -72,7 +81,7 @@ public static class Bundle
             if (end <= b.Length && !b.AsSpan(nul, end - nul).ContainsAnyExcept((byte)0))
                 return Encoding.UTF8.GetString(b, start, nul - start);
         }
-        return "";
+        return null;
     }
 
     static BundleInfo? ReadAt(string hostPath, byte[] b, int sig)
@@ -122,19 +131,59 @@ public static class Bundle
         return output;
     }
 
-    /// <summary>The app's own assembly: the entry named after the host (App.exe / App -> App.dll), else the first assembly.</summary>
-    public static BundleEntry? MainAssembly(BundleInfo info)
+    /// <summary>
+    /// The app's own assembly: the one the host names (the path the SDK wrote into it, which renaming the host does not
+    /// change), else the entry named after the host (App.exe / App -> App.dll), else the first assembly.
+    /// </summary>
+    public static BundleEntry? MainAssembly(BundleInfo info, byte[]? host = null)
     {
+        static bool Same(string a, string b) => string.Equals(a.Replace('\\', '/'), b.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+        if (host != null)
+            for (int from = 0, at; (at = host.AsSpan(from).IndexOf(Signature)) >= 0; from += at + 1)
+                if (EmbeddedAppPath(host, from + at) is { Length: > 0 } app
+                    && info.Entries.FirstOrDefault(e => e.Type == 1 && (Same(e.Path, app) || Same(System.IO.Path.GetFileName(e.Path), System.IO.Path.GetFileName(app)))) is { } named)
+                    return named;
         var name = System.IO.Path.GetFileNameWithoutExtension(info.HostPath);
         return info.Entries.FirstOrDefault(e => e.Type == 1 && string.Equals(System.IO.Path.GetFileNameWithoutExtension(e.Path), name, StringComparison.OrdinalIgnoreCase))
                ?? info.Entries.FirstOrDefault(e => e.Type == 1);
     }
 
-    /// <summary>Framework assemblies a self-contained bundle carries; the shared framework resolves them anyway.</summary>
-    public static bool IsFramework(BundleEntry e)
+    /// <summary>
+    /// The framework assemblies a self-contained bundle carries (the shared framework resolves them anyway): the files of
+    /// the runtime pack, as the bundle's deps.json lists them; without one, the framework's file names.
+    /// </summary>
+    public static HashSet<BundleEntry> FrameworkEntries(byte[] host, BundleInfo info)
     {
-        var n = System.IO.Path.GetFileName(e.Path);
+        var runtime = RuntimePackFiles(host, info);
+        return info.Entries.Where(e => e.Type == 1 && (runtime != null ? runtime.Contains(System.IO.Path.GetFileName(e.Path)) : FrameworkName(e.Path))).ToHashSet();
+    }
+
+    static bool FrameworkName(string path)
+    {
+        var n = System.IO.Path.GetFileName(path);
         return n.StartsWith("System.", StringComparison.OrdinalIgnoreCase) || n.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase)
                || n is "mscorlib.dll" or "netstandard.dll" or "WindowsBase.dll";
+    }
+
+    // deps.json: libraries of type "runtimepack" and, under targets, the runtime files each lists; null when there is no
+    // deps.json or no runtime pack in it (a framework-dependent bundle carries none)
+    static HashSet<string>? RuntimePackFiles(byte[] host, BundleInfo info)
+    {
+        if (info.Entries.FirstOrDefault(e => e.Type == 3) is not { } deps) return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(Extract(host, deps));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("libraries", out var libs) || !root.TryGetProperty("targets", out var targets)) return null;
+            var packs = libs.EnumerateObject().Where(l => l.Value.TryGetProperty("type", out var t) && t.GetString() == "runtimepack").Select(l => l.Name).ToHashSet();
+            if (packs.Count == 0) return null;
+            var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var target in targets.EnumerateObject())
+                foreach (var lib in target.Value.EnumerateObject().Where(l => packs.Contains(l.Name)))
+                    if (lib.Value.TryGetProperty("runtime", out var rt))
+                        foreach (var f in rt.EnumerateObject()) files.Add(System.IO.Path.GetFileName(f.Name));
+            return files.Count > 0 ? files : null;
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or InvalidDataException or InvalidOperationException) { return null; }
     }
 }

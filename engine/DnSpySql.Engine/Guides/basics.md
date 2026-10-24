@@ -60,7 +60,9 @@ SELECT signature, mutates, description FROM dnspysql_functions WHERE name LIKE '
 - Equality filters on `pushdown` columns are answered by the engine; other filters run after the scan. Add `LIMIT`
   while exploring.
 - `callers` includes calls that reach a method through a base or interface method it overrides or implements
-  (`via` = `virtual` or `interface`); `call_edges` and `xrefs` record only the method the IL names.
+  (`via` = `virtual` or `interface`) or through proxies, static methods that only pass their arguments on
+  (`via = 'proxy'`); `call_edges` and `xrefs` record the method the IL names, and `call_edges.target_name` the method
+  behind the proxies.
 - `decompile()`, `decompile_module()` and `il_text()` never fail a query: a failure comes back as text starting with
   `/* dnspysql:`.
 - Blobs: `length()`, `hex(substr(x, 1, 16))`, `entropy(x)`, `text_decode(x)`. `md5`/`sha1`/`sha256` return hex text
