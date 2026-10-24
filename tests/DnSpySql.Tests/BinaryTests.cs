@@ -28,6 +28,44 @@ public sealed class BinaryTests : SampleTest
     }
 
     [Fact]
+    public void Win32_resources_recover_the_types_that_parse_when_one_is_corrupt()
+    {
+        // A resource directory entry whose subdirectory pointer runs out of the image makes dnlib throw while the
+        // table walks that type's subtree (as a real packed sample did: DataReaderException "Invalid new Position").
+        // The corrupt type must be skipped and the intact ones still returned - not the whole table lost. Sample has
+        // VERSION (id 16) then MANIFEST (id 24) in id order, so corrupting the earlier one proves the later survives.
+        var bytes = File.ReadAllBytes(Sample);
+        int rsrc;
+        using (var pe = new PEReader(new MemoryStream(bytes)))
+        {
+            var dir = pe.PEHeaders.PEHeader!.ResourceTableDirectory;
+            Assert.True(dir.Size > 0, "Sample has no win32 resources to corrupt");
+            var sec = pe.PEHeaders.SectionHeaders.First(s => dir.RelativeVirtualAddress >= s.VirtualAddress
+                && dir.RelativeVirtualAddress < s.VirtualAddress + s.VirtualSize);
+            rsrc = sec.PointerToRawData + (dir.RelativeVirtualAddress - sec.VirtualAddress);
+        }
+        // the root IMAGE_RESOURCE_DIRECTORY's id entries (after its named entries) start after the 16-byte header, 8
+        // bytes each: id in the low 16 bits of word 0, the subdirectory offset in word 1. Point VERSION's past EOF.
+        int named = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(rsrc + 12));
+        int ids = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(rsrc + 14));
+        int version = Enumerable.Range(0, named + ids).Select(i => rsrc + 16 + i * 8)
+            .First(e => (System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(e)) & 0xFFFF) == 16); // RT_VERSION
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(version + 4), 0x80000000u | 0x6FFFFFFFu);
+        var edited = PathIn("BadResources.dll");
+        File.WriteAllBytes(edited, bytes);
+        var r = Cli.Run(edited, "SELECT group_concat(type) FROM win32_resources", "SELECT count(*) FROM types").Ok();
+        Assert.Equal("MANIFEST", r.Text(0)); // the intact type survives the corrupt VERSION before it, which is dropped
+        Assert.True(r.Long(1) > 0);          // and the module still loaded: the rest of the schema works
+    }
+
+    [Fact]
+    public void Counting_file_bytes_is_the_file_length()
+    {
+        // a bare COUNT(*) over file_bytes is answered from the file size, not by walking one row per byte
+        Assert.Equal(new FileInfo(Sample).Length, Run("SELECT count(*) FROM file_bytes").Long());
+    }
+
+    [Fact]
     public void An_app_host_names_the_assembly_it_starts()
     {
         // the framework-dependent launcher the SDK builds beside Sample.dll: no .NET code, only the path of the app in a

@@ -173,7 +173,8 @@ public static unsafe class Exports
                 var t = S.Db.Table(Str(a[0], "table"));
                 if (t.Columns.Any(c => c.Required))
                     throw new SqlException($"table '{t.Name}' needs a filter: {t.RequiredHint()}");
-                return Wire.EncodeList(t.Rows(new Constraints()).LongCount());
+                var cc = new Constraints();
+                return Wire.EncodeList(t.CountRows?.Invoke(cc) ?? t.Rows(cc).LongCount());
             }
             case "get":
             {

@@ -114,6 +114,8 @@ public static class PeTables
             .Text("section", r => SectionOf(r.m, r.off));
         bytes.JournalUpdates = false;
         bytes.Estimate(1_000_000);
+        // A bare COUNT(*) is one row per file byte; the count is just the files' total length, no need to walk them.
+        bytes.CountRows = c => ws.Modules(c).Sum(m => (long)m.DiskBytes.Length);
         db.Register(bytes);
 
         db.Register(new Table<(LoadedModule m, long off, int len)>("byte_search",
@@ -446,17 +448,31 @@ public static class PeTables
 
     static IEnumerable<(string, string, string, byte[])> Win32Res(LoadedModule m)
     {
-        var root = m.FileMetadata.PEImage.Win32Resources?.Root;
-        if (root == null) yield break;
+        // dnlib reads the resource tree lazily, so a corrupt directory or a leaf pointing out of the image throws
+        // (DataReaderException) only while we walk it. Recover like VersionText: a bad leaf is skipped and a bad branch
+        // ends the walk, but every entry that parsed is still returned, rather than the whole table yielding nothing.
         static string N(ResourceName n, Dictionary<int, string>? map = null) =>
             n.HasId ? (map != null && map.TryGetValue(n.Id, out var s) ? s : n.Id.ToString()) : n.Name;
-        foreach (var t in root.Directories)
-            foreach (var n in t.Directories)
-                foreach (var l in n.Data)
-                {
-                    var r = l.CreateReader();
-                    yield return (N(t.Name, ResTypes), N(n.Name), N(l.Name), r.ReadBytes((int)r.Length));
-                }
+        var rows = new List<(string, string, string, byte[])>();
+        IList<ResourceDirectory> types;
+        try { types = m.FileMetadata.PEImage.Win32Resources?.Root?.Directories ?? (IList<ResourceDirectory>)Array.Empty<ResourceDirectory>(); }
+        catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException) { return rows; } // the root itself won't read
+        foreach (var t in types)
+            // a corrupt branch throws while this one type's subtree is walked; skip the type and keep the others (so a
+            // broken RCDATA does not cost the VERSION and MANIFEST that follow it), and a leaf that won't read is skipped.
+            try
+            {
+                foreach (var n in t.Directories)
+                    foreach (var l in n.Data)
+                    {
+                        byte[] bytes;
+                        try { var r = l.CreateReader(); bytes = r.ReadBytes((int)r.Length); }
+                        catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException) { continue; }
+                        rows.Add((N(t.Name, ResTypes), N(n.Name), N(l.Name), bytes));
+                    }
+            }
+            catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException) { }
+        return rows;
     }
 
     /// <summary>

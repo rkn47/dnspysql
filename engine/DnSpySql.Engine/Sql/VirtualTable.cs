@@ -123,6 +123,9 @@ public abstract class VirtualTable
     public bool IsKeyed { get; protected set; }
 
     public abstract IEnumerable<object> Rows(Constraints c);
+    /// <summary>Fast path for a bare COUNT(*): the row count without building rows, or null to fall back to counting
+    /// <see cref="Rows"/>. Set it only where the count is cheap to compute directly (e.g. a byte count from a length).</summary>
+    public Func<Constraints, long?>? CountRows { get; set; }
     /// <summary>Stable row id for keyed tables (needed by UPDATE/DELETE).</summary>
     public virtual long RowId(object row) => throw new NotSupportedException();
     public virtual object? Find(long rowid) => null;
