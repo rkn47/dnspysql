@@ -250,13 +250,11 @@ public static class ResourceTables
     /// <summary>Prefix length Sniff looks at: long enough that a short text header on random data is not taken for text.</summary>
     const int SniffBytes = 1024, EntropyBytes = 64 * 1024;
 
-    // What the bytes are, without the name: a payload named *.exe that is AES ciphertext is 'high entropy', not a PE.
+    // What the bytes are, without the name: known magic (gzip, zlib, a PE, ...), text, else binary or 'high entropy'.
     public static string Content(byte[] b)
     {
         var kind = Sniff(b.Length > SniffBytes ? b[..SniffBytes] : b, "");
-        if (kind != "binary" || b.Length < 256 || Overlay.Entropy(b) <= 7.5) return kind;
-        // compressed rather than encrypted when the bytes inflate: decompress() takes them (after a 4-byte length too)
-        return ProtectionTables.Stream(b) ?? "high entropy";
+        return kind == "binary" && b.Length >= 256 && Overlay.Entropy(b) > 7.5 ? "high entropy" : kind;
     }
 
     public static string Sniff(byte[] b, string name)

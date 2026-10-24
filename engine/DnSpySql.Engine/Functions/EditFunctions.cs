@@ -141,16 +141,6 @@ public static class EditFunctions
             return n;
         }, "replace_string(old, new [, module])", "rewrite every ldstr equal to old; returns the number changed", "edit", mutates: true);
 
-        s.Fn("inline_strings", 0, 3, a => InlineStrings(s, ws.ModuleArg(a.Arg(0)), ws.HandleArg(a.Arg(1)), (Values.ToText(a.Arg(2)) ?? "code").ToLowerInvariant()),
-            "inline_strings([module [, decryptor [, mode]]])",
-            "replace every string decryptor call that decryptor_calls interprets (emulation = 'ok', a string; library decryptors left " +
-            "out) with ldstr of its plaintext, so decompile() and a save() for dnSpy show the strings; the literal arguments become " +
-            "nops; a site code jumps into is left, with a note. decryptor = a method handle takes that method only (NULL: every one). " +
-            "mode: code (default) | comment (no code change: the plaintext becomes a comment at each call, which save() writes for " +
-            "dnSpy) | both (code where it can, a comment at the sites code jumps into, as in flattened control flow). One undoable step; " +
-            "returns the number of call sites replaced or commented",
-            "edit", mutates: true);
-
         // ---- namespaces (dnSpy Namespace commands) ----
         s.Fn("rename_namespace", 2, 3, a =>
         {
@@ -231,96 +221,6 @@ public static class EditFunctions
             ws.Touch(lm);
             return p.MDToken.Rid != 0 ? lm.H(p) : null;
         }, "import_member(target_module, handle)", "create a TypeRef/MemberRef in target_module for an entity of another module; returns the new handle", "edit", mutates: true);
-    }
-
-    // What decryptor_calls computed, put where the code asks for it: each call site that interprets to a string becomes
-    // ldstr. Driven by the interpreter and the call shape only, so it is the same for every protector.
-    static long InlineStrings(Session s, LoadedModule lm, long? decryptor, string mode)
-    {
-        if (mode is not ("code" or "comment" or "both")) throw new SqlException($"mode '{mode}' is not code, comment or both");
-        var sites = new List<(MethodDef Caller, Instruction Call, int Args, string Text)>();
-        int skipped = 0;
-        // every plaintext first: the first edit starts the interpreter afresh
-        foreach (var c in ProtectionTables.Calls(s, lm, decryptor, 5).Where(c => decryptor != null || !TriageTables.IsLibrary(c.Decryptor)).ToList())
-        {
-            var (value, status) = c.Plain.Value;
-            var ins = c.Site.From.Body?.Instructions;
-            if (status != "ok" || value is not string text || !ReturnsString(c) || ins == null || c.Site.Index >= ins.Count
-                || !ReferenceEquals(ins[c.Site.Index].Operand, c.Site.Operand)) { skipped++; continue; }
-            sites.Add((c.Site.From, ins[c.Site.Index], c.Args.Count, text));
-        }
-        if (mode == "comment") return Comment(s, lm, sites.Select(x => (x.Caller, x.Call.Offset, x.Text)).ToList());
-        long done = 0;
-        int shared = 0;
-        var annotate = new List<(MethodDef Caller, Instruction Call, int Args, string Text)>(); // offsets read after the edits move them
-        foreach (var g in sites.GroupBy(x => x.Caller))
-        {
-            var targets = Targets(g.Key.Body);
-            var clean = g.Where(x => Clean(g.Key.Body, x.Call, x.Args, targets) is not null).ToList();
-            shared += g.Count() - clean.Count;
-            if (mode == "both") annotate.AddRange(g.Except(clean));
-            if (clean.Count == 0) continue;
-            BodyEditor.Edit(s, g.Key, "inline_strings", b =>
-            {
-                foreach (var (_, call, n, text) in clean)
-                {
-                    foreach (var x in Clean(b, call, n, targets)!) { x.OpCode = OpCodes.Nop; x.Operand = null; }
-                    call.OpCode = OpCodes.Ldstr; call.Operand = text;
-                    done++;
-                }
-            });
-        }
-        if (skipped > 0)
-            s.Notices.Add($"inline_strings: {skipped} call site(s) left as they are (not interpreted, or not a string: see decryptor_calls.emulation)");
-        if (annotate.Count > 0) done += Comment(s, lm, annotate.Select(x => (x.Caller, x.Call.Offset, x.Text)).ToList());
-        else if (shared > 0)
-            s.Notices.Add($"inline_strings: {shared} call site(s) left as they are: code jumps into their arguments, so other paths pass other " +
-                          "values (flattened control flow); their plaintexts are in decryptor_calls, and inline_strings(module, decryptor, 'both') " +
-                          "writes them as comments there");
-        return done;
-    }
-
-    // The plaintext as a comment at each call (the comments table, which save() writes as XML documentation for dnSpy):
-    // for code a rewrite would break, or when the code must stay as it is. One undoable step with the statement's edits.
-    static long Comment(Session s, LoadedModule lm, List<(MethodDef Caller, uint Offset, string Text)> sites) =>
-        AnnotationTables.ReplaceComments(s, $"inline_strings: {sites.Count} comment(s)", sites.Select(x =>
-            (AnnotationTables.Loc(s, lm.H(x.Caller), (long)x.Offset),
-             (string?)$"decrypted: \"{Output.Visible(x.Text.Length > 500 ? x.Text[..500] + "…" : x.Text)}\"")).ToList());
-
-    // a string where the code expects one: string, object, or a generic T the call site instantiates with string
-    static bool ReturnsString(ProtectionTables.DecryptorCall c) => c.Decryptor.MethodSig?.RetType?.ElementType switch
-    {
-        ElementType.String or ElementType.Object => true,
-        ElementType.MVar => c.Site.Operand is MethodSpec { GenericInstMethodSig.GenericArguments: [{ ElementType: ElementType.String }] },
-        _ => false,
-    };
-
-    // instructions something jumps to, or a handler starts or ends at
-    static HashSet<Instruction> Targets(CilBody b)
-    {
-        var set = new HashSet<Instruction>();
-        foreach (var i in b.Instructions)
-            if (i.Operand is Instruction t) set.Add(t);
-            else if (i.Operand is Instruction[] ts) set.UnionWith(ts);
-        foreach (var eh in b.ExceptionHandlers)
-            foreach (var x in new[] { eh.TryStart, eh.TryEnd, eh.HandlerStart, eh.HandlerEnd, eh.FilterStart })
-                if (x != null) set.Add(x);
-        return set;
-    }
-
-    // The instructions of a call's arguments, found as decryptor_calls found them (IlArgs: constant expressions too), when
-    // the call and its arguments are one straight sequence; null when code jumps into it (past its first instruction),
-    // since another path then arrives with other values, or a prefix (volatile.) stands in front of it.
-    static List<Instruction>? Clean(CilBody b, Instruction call, int n, HashSet<Instruction> targets)
-    {
-        var ins = b.Instructions;
-        int at = ins.IndexOf(call);
-        if (at < 0 || targets.Contains(call) || IlArgs.Starts(ins, at, n) is not { } starts) return null;
-        int first = starts[0];
-        for (int i = first + 1; i < at; i++)
-            if (targets.Contains(ins[i])) return null; // a jump lands after the first instruction
-        if (first > 0 && ins[first - 1].OpCode.OpCodeType == OpCodeType.Prefix) return null;
-        return ins.Skip(first).Take(at - first).Where((_, k) => !IlArgs.IsFiller(ins, first + k)).ToList();
     }
 
     static Instruction Ins(CilBody b, int i) =>

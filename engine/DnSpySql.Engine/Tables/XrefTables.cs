@@ -30,7 +30,7 @@ public static class XrefTables
 
         db.Register(new Table<XRef>("xrefs",
                 "Every IL reference: calls, field read/write/addr, type and token uses, ldstr. Filter on from_method, to_def or to_name. " +
-                "Bodies that are not IL (encrypted until runtime, see method_bodies) are left out: SELECT untamper() first") { Domain = "xrefs" }
+                "Bodies that are not IL (encrypted until runtime, see method_bodies) are left out") { Domain = "xrefs" }
             .Source(Scope)
             .Int("module", x => x.M.Id, pushdown: Pushdown.Eq)
             .Int("from_method", x => x.FromHandle, pushdown: Pushdown.Eq)
@@ -54,12 +54,6 @@ public static class XrefTables
                 if (c.Long("src") is long sm) return ix.From(ws.Normalize(sm)).Where(x => x.IsCall);
                 if (c.Long("dst") is 0) return ix.All.Where(x => x.IsCall && x.DefHandle == null);
                 if (c.Long("dst") is long dm) return ix.To(ws.Normalize(dm)).Where(x => x.IsCall);
-                if (c.Long("target") is 0) return ix.All.Where(x => x.IsCall && x.TargetHandle == null);
-                if (c.Long("target") is long tm)
-                {
-                    var t = ws.Normalize(tm);
-                    return ix.To(t).Where(x => x.IsCall && x.Proxies == 0).Concat(ix.ThroughProxiesTo(t));
-                }
                 return ix.All.Where(x => x.IsCall);
             })
             .Int("module", x => x.M.Id)
@@ -72,15 +66,6 @@ public static class XrefTables
             .Text("dst_name", x => x.ToName)
             .Text("dst_assembly", x => x.Def?.Module?.Assembly?.Name.String ?? ExternalAssembly(x.Operand))
             .Bool("is_external", x => x.Def == null)
-            .Text("string_args", StringArgs,
-                doc: "the string literal passed to each string parameter of the callee, as a JSON array (null where the argument is not a " +
-                     "literal: a field, a call's result, a parameter); NULL when the callee takes no string. A mutex's or a registry key's " +
-                     "name, a URL. From the IL only: decryptor_calls and decoded_fields interpret what is computed")
-            .Handle("target", x => x.TargetHandle ?? 0,
-                doc: "the method finally called: dst, or, when dst is a proxy (a static method that only passes its arguments on, which " +
-                     "obfuscators put in front of every API), the method behind it, up to three proxies deep; 0 when it is external")
-            .Text("target_name", x => x.TargetName, doc: "dst_name, or the name of the method behind the proxies")
-            .Int("proxies", x => x.Proxies, doc: "how many proxies the call passes through (0: dst is what it calls)")
             .Estimate(100_000));
 
         // A callvirt names the slot it calls through (Shape::Area, IShape::Area), so call_edges has no edge to an override
@@ -120,34 +105,28 @@ public static class XrefTables
 
         // callers was a view over call_edges; it is a table so the direct calls and the dispatched ones answer one handle
         // filter (a compound view re-checks WHERE method = <bare token> against the full handle and loses every row).
-        IEnumerable<(XRef x, long method, string via)> Callers(Constraints c)
+        IEnumerable<(XRef x, long method, MethodDef? slot, bool iface)> Callers(Constraints c)
         {
             if (c.Long("method") is long mh)
             {
                 if (mh == 0) yield break; // 0 is "external" in call_edges: no method to have callers
                 var h = ws.Normalize(mh);
-                foreach (var x in ix.To(h)) if (x.IsCall) yield return (x, h, "direct");
-                foreach (var x in ix.ThroughProxiesTo(h)) yield return (x, h, "proxy");
+                foreach (var x in ix.To(h)) if (x.IsCall) yield return (x, h, null, false);
             }
             else
-                foreach (var x in ix.All)
-                {
-                    if (x.IsCall && x.DefHandle is long d) yield return (x, d, "direct");
-                    if (x.Proxies > 0 && x.TargetHandle is long t) yield return (x, t, "proxy");
-                }
-            foreach (var (x, target, _, iface) in Dispatch(c)) yield return (x, ws.Find(target.Module)!.H(target), iface ? "interface" : "virtual");
+                foreach (var x in ix.All) if (x.IsCall && x.DefHandle is long d) yield return (x, d, null, false);
+            foreach (var (x, target, slot, iface) in Dispatch(c)) yield return (x, ws.Find(target.Module)!.H(target), slot, iface);
         }
-        db.Register(new Table<(XRef x, long method, string via)>("callers",
+        db.Register(new Table<(XRef x, long method, MethodDef? slot, bool iface)>("callers",
                 "Who calls a method: WHERE method = <handle>. via = direct (the call names the method), virtual or interface (a callvirt on a " +
-                "base or interface method it overrides or implements, which can dispatch to it; see dispatch_calls), or proxy (the call " +
-                "names a proxy that passes its arguments on to the method: call_edges.target)") { Domain = "xrefs" }
+                "base or interface method it overrides or implements, which can dispatch to it; see dispatch_calls)") { Domain = "xrefs" }
             .Source(Callers)
             .Int("method", r => r.method, pushdown: Pushdown.Eq)
             .Int("caller", r => r.x.FromHandle)
             .Text("caller_name", r => r.x.From.FullName)
             .Int("call_site", r => r.x.Offset, doc: "IL offset in caller")
             .Text("kind", r => r.x.Kind)
-            .Text("via", r => r.via, doc: "direct | virtual | interface | proxy"));
+            .Text("via", r => r.slot == null ? "direct" : r.iface ? "interface" : "virtual", doc: "direct | virtual | interface"));
 
         // ================= string references (dnSpy String References window) =================
         db.Register(new Table<(LoadedModule m, string kind, string literal, IMDTokenProvider referrer, uint? offset, string detail)>("string_refs",
@@ -180,18 +159,6 @@ public static class XrefTables
             .Int("module", h => h.M.Id)
             .Int("offset", h => h.Offset, doc: "IL offset of the first hit inside the method (uses / used_by / read_by ...)")
             .Text("detail", h => h.Detail));
-    }
-
-    // call_edges.string_args: per string parameter of the callee, the literal it is given (IlArgs)
-    static string? StringArgs(XRef x)
-    {
-        if (x.Kind is not ("call" or "callvirt" or "newobj") || x.Operand is not IMethod callee || callee.MethodSig?.Params is not { } ps
-            || !ps.Any(p => p?.ElementType == ElementType.String)) return null;
-        IList<Instruction> ins;
-        try { ins = x.From.Body.Instructions; } catch (Exception) { return null; }
-        var literals = IlArgs.StringLiterals(ins, x.Index);
-        var values = Enumerable.Range(0, ps.Count).Where(k => ps[k]?.ElementType == ElementType.String).Select(k => literals?[k]).ToList();
-        return System.Text.Json.JsonSerializer.Serialize(values);
     }
 
     static string? ExternalAssembly(object? operand) => operand switch

@@ -28,9 +28,6 @@ public static class Registry
         HexTables.Register(s);
         ImageTables.Register(s);
         ApiDocTables.Register(s);
-        ProtectionTables.Register(s);
-        TriageTables.Register(s);
-        EmulatorTables.Register(s);
         GuideTables.Register(s);
 
         CoreFunctions.Register(s);
@@ -38,7 +35,6 @@ public static class Registry
         CompileFunctions.Register(s);
         DataFunctions.Register(s);
         DnSpyFunctions.Register(s);
-        TriageFunctions.Register(s);
 
         foreach (var t in s.Db.Tables) t.Sink = s.Ws;
 
@@ -60,6 +56,6 @@ public static class Registry
 
     static readonly HashSet<string> HandleColumns = new()
     {
-        "handle", "method", "type", "declaring_type", "owner", "referrer", "from_method", "to_def", "src", "dst", "target",
+        "handle", "method", "type", "declaring_type", "owner", "referrer", "from_method", "to_def", "src", "dst",
     };
 }

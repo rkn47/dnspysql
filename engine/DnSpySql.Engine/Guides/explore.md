@@ -12,7 +12,8 @@ SELECT name, kind, size, content_type FROM resources;
 SELECT name, call_in, call_out, hotness_score FROM method_metrics ORDER BY hotness_score DESC LIMIT 15;
 ```
 
-If `protections` reports obfuscation, anti-tamper or string encryption, read the `unpack` guide first.
+Obfuscated names (non-printable, `a`/`b`/`#=q…`) mean you work by handle and by shape (`method_metrics`, call graphs,
+`il`) rather than by name.
 
 ## Find
 
@@ -59,11 +60,13 @@ WITH RECURSIVE up(m, depth) AS (
 SELECT depth, name_of(m) FROM up ORDER BY depth;
 ```
 
-## Data and resources
+## Constants and resources
 
 ```sql
-SELECT field_name, type_name, kind, value FROM field_inits WHERE NOT is_default;
+SELECT value, referrer_name, offset FROM string_refs;                 -- every string literal and where it is used
+SELECT f.full_name, i.operand_text FROM fields f JOIN il i ON i.operand_text LIKE '%' || f.name;  -- stores into a field
 SELECT resource, name, type, value FROM resource_elements WHERE type = 'String';
+SELECT name, size, content_type, hex(substr(data, 1, 16)) FROM resources;   -- data is the raw bytes; decode in your own code
 SELECT resource, name, xaml FROM baml;
 ```
 

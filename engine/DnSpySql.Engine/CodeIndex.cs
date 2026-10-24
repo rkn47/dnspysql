@@ -19,16 +19,6 @@ public sealed class XRef
     public LoadedModule? DefModule;
     public string ToName = "";
     public string? StringValue;
-    /// <summary>
-    /// For a call: the method finally called, through up to three proxies (static methods that only pass their arguments
-    /// on, which obfuscators put in front of every API), its definition and how many proxies were passed; the call's
-    /// own target when it calls no proxy.
-    /// </summary>
-    public object? Target;
-    public IMemberDef? TargetDef;
-    public long? TargetHandle;
-    public string TargetName = "";
-    public int Proxies;
     public long FromHandle => M.H(From);
     public bool IsCall => Kind is "call" or "callvirt" or "newobj" or "ldftn" or "ldvirtftn" or "jmp" or "async";
 }
@@ -39,7 +29,7 @@ public sealed class CodeIndex
     readonly Session _s;
     long _builtAt = -1;
     List<XRef> _all = new();
-    Dictionary<long, List<XRef>> _byFrom = new(), _byTo = new(), _byTarget = new();
+    Dictionary<long, List<XRef>> _byFrom = new(), _byTo = new();
     Dictionary<string, List<XRef>> _byName = new(StringComparer.Ordinal);
 
     public CodeIndex(Session s) { _s = s; }
@@ -50,7 +40,7 @@ public sealed class CodeIndex
     public void Reset()
     {
         _builtAt = -1;
-        (_all, _byFrom, _byTo, _byTarget, _byName) = (new(), new(), new(), new(), new(StringComparer.Ordinal));
+        (_all, _byFrom, _byTo, _byName) = (new(), new(), new(), new(StringComparer.Ordinal));
     }
     public void InvalidateIfChanged() { if (_builtAt != _s.Ws.Revision) _builtAt = -1; }
 
@@ -67,12 +57,9 @@ public sealed class CodeIndex
                         Scan(lm, m, all, cache);
                         if (StateMachine(lm, m) is { } started) all.Add(started);
                     }
-        var forwards = new Dictionary<MethodDef, IMethod?>();
-        foreach (var x in all) ThroughProxies(x, forwards, cache);
         _all = all;
         _byFrom = all.GroupBy(x => x.FromHandle).ToDictionary(g => g.Key, g => g.ToList());
         _byTo = all.Where(x => x.DefHandle != null).GroupBy(x => x.DefHandle!.Value).ToDictionary(g => g.Key, g => g.ToList());
-        _byTarget = all.Where(x => x.Proxies > 0 && x.TargetHandle != null).GroupBy(x => x.TargetHandle!.Value).ToDictionary(g => g.Key, g => g.ToList());
         _byName = all.GroupBy(x => x.ToName).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         _builtAt = _s.Ws.Revision;
     }
@@ -165,49 +152,8 @@ public sealed class CodeIndex
                 (r.Def, r.DefHandle, r.DefModule) = res;
                 r.ToName = (x.Operand as IFullName)?.FullName ?? x.Operand.ToString() ?? "";
             }
-            (r.Target, r.TargetDef, r.TargetHandle, r.TargetName) = (r.Operand, r.Def, r.DefHandle, r.ToName); // the index follows proxies (Ensure)
             list.Add(r);
         }
-    }
-
-    const int MaxProxies = 3;
-
-    // A call's final target, through the proxies in front of it
-    void ThroughProxies(XRef x, Dictionary<MethodDef, IMethod?> forwards, Dictionary<object, (IMemberDef?, long?, LoadedModule?)> cache)
-    {
-        (x.Target, x.TargetDef, x.TargetHandle, x.TargetName) = (x.Operand, x.Def, x.DefHandle, x.ToName);
-        if (x.Kind is not ("call" or "callvirt" or "newobj")) return;
-        for (var def = x.Def as MethodDef; def != null && x.Proxies < MaxProxies; def = x.TargetDef as MethodDef)
-        {
-            if (!forwards.TryGetValue(def, out var next)) forwards[def] = next = Forward(def);
-            if (next == null || ReferenceEquals(next, def)) return;
-            if (!cache.TryGetValue(next, out var res))
-            {
-                var d = ResolveDef(next);
-                var dlm = d == null ? null : _s.Ws.Find(d.Module);
-                res = dlm == null ? (null, null, null) : (d, dlm.H(d!), dlm);
-                cache[next] = res;
-            }
-            (x.Target, x.TargetDef, x.TargetHandle) = (next, res.Item1, res.Item2);
-            x.TargetName = next.FullName;
-            x.Proxies++;
-        }
-    }
-
-    /// <summary>
-    /// The method a proxy forwards to: a static method that only loads its arguments, calls one method of another name
-    /// and returns (at most eight instructions besides nops and branches to the next instruction); null for any other.
-    /// </summary>
-    public static IMethod? Forward(MethodDef m)
-    {
-        if (!m.IsStatic || !m.HasBody) return null;
-        IList<Instruction> ins;
-        try { ins = m.Body.Instructions; } catch (Exception) { return null; }
-        var real = Enumerable.Range(0, ins.Count).Where(i => !IlArgs.IsFiller(ins, i)).Select(i => ins[i]).ToList();
-        if (real.Count is < 2 or > 8 || real[^1].OpCode.Code != Code.Ret || real[^2].OpCode.Code is not (Code.Call or Code.Callvirt or Code.Newobj)) return null;
-        for (int i = 0; i < real.Count - 2; i++)
-            if (!real[i].IsLdarg()) return null;
-        return real[^2].Operand is IMethod target && target.Name != m.Name ? target : null;
     }
 
     static string? KindOf(Instruction x)
@@ -251,7 +197,5 @@ public sealed class CodeIndex
     public IReadOnlyList<XRef> All { get { Ensure(); return _all; } }
     public IReadOnlyList<XRef> From(long methodHandle) { Ensure(); return _byFrom.TryGetValue(methodHandle, out var l) ? l : Array.Empty<XRef>(); }
     public IReadOnlyList<XRef> To(long defHandle) { Ensure(); return _byTo.TryGetValue(defHandle, out var l) ? l : Array.Empty<XRef>(); }
-    /// <summary>The calls that reach a method through one or more proxies (not the direct ones: To has those).</summary>
-    public IReadOnlyList<XRef> ThroughProxiesTo(long defHandle) { Ensure(); return _byTarget.TryGetValue(defHandle, out var l) ? l : Array.Empty<XRef>(); }
     public IReadOnlyList<XRef> ToName(string name) { Ensure(); return _byName.TryGetValue(name, out var l) ? l : Array.Empty<XRef>(); }
 }

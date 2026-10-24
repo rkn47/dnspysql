@@ -85,7 +85,6 @@ public static unsafe class Exports
                     QueryTimeoutMs = (int)Num("timeout_ms", 0),
                     MaxRows = (int)Num("max_rows", 0),
                     DnSpyXml = Opt("dnspy_xml"),
-                    NoEmulation = Flag("no_emulation"),
                 };
                 if (o.TryGetProperty("ref_paths", out var refs))
                     foreach (var r in refs.EnumerateArray()) if (r.GetString() is { } p) opts.ReferencePaths.Add(p);

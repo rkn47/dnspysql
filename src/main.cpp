@@ -51,7 +51,6 @@ const char* kUsage =
     "      --remote URL      send -c/-f SQL to a running DnSpySql HTTP server instead (uses --token, --format)\n"
     "      --ref DIR         extra directory with referenced assemblies (repeatable; e.g. .NET Framework refs on Linux)\n"
     "      --readonly        refuse every write (tables and functions)\n"
-    "      --no-emulation    interpret no IL (emulate, decryptor_calls.plaintext, decoded_fields, untamper): static tables only\n"
     "      --project PATH    annotation store (default: <first input>.dnspysql.json)\n"
     "      --no-project      keep annotations in memory only\n"
     "      --dnspy-xml PATH  dnSpy settings file kept in step with breakpoints/bookmarks: auto (default), off, or a path\n"
@@ -298,7 +297,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> inputs, refs;
     std::string engine_arg, format = "table", bind = "127.0.0.1", token, remote, project, dnspy_xml;
     int http_port = -1;
-    bool mcp = false, interactive = false, cont = false, read_only = false, no_project = false, schema_md = false, no_emulation = false;
+    bool mcp = false, interactive = false, cont = false, read_only = false, no_project = false, schema_md = false;
     long long timeout_ms = 0, max_rows = 100000;
     bool max_rows_given = false;
 
@@ -332,7 +331,6 @@ int main(int argc, char** argv) {
             else if (a == "--remote") remote = value("--remote");
             else if (a == "--ref") refs.push_back(value("--ref"));
             else if (a == "--readonly") read_only = true;
-            else if (a == "--no-emulation") no_emulation = true;
             else if (a == "--project") project = value("--project");
             else if (a == "--no-project") no_project = true;
             else if (a == "--dnspy-xml") dnspy_xml = value("--dnspy-xml");
@@ -364,7 +362,7 @@ int main(int argc, char** argv) {
         engine.start(engine_arg.empty() ? exe_dir() / "engine" : fs::path(engine_arg));
         nlohmann::json opts = {
             {"sqlite_version", sqlite3_libversion()}, {"version", kVersion}, {"commit", kCommit}, {"read_only", read_only},
-            {"no_project", no_project || schema_md}, {"timeout_ms", timeout_ms}, {"ref_paths", refs}, {"no_emulation", no_emulation},
+            {"no_project", no_project || schema_md}, {"timeout_ms", timeout_ms}, {"ref_paths", refs},
         };
         // the session's cap (the max_rows setting) only when given: it then applies to the MCP and HTTP requests too
         if (max_rows_given) opts["max_rows"] = max_rows;

@@ -1,16 +1,15 @@
 # DnSpySql basics
 
-DnSpySql exposes .NET assemblies as SQLite tables through dnSpy's engine (dnlib + dnSpyEx's decompiler): metadata, IL,
-cross-references, dnSpy's Analyzer, decompiled C# with its line-to-IL mapping, resources, PE bytes, PDB data, triage
-tables and dnSpy's breakpoint configuration. Other guides: `SELECT topic, title FROM dnspysql_guides`.
+DnSpySql is one thing: an SQL interface to dnSpy's model of a .NET assembly (dnlib's metadata and dnSpyEx's
+decompiler) — metadata, IL, cross-references, dnSpy's Analyzer, decompiled C# with its line-to-IL mapping, resources,
+PE bytes, PDB data, and dnSpy's breakpoint configuration. It maps dnSpy to tables and does not analyse for you:
+triage, config extraction and unpacking are the agent's own work, done with these tables plus your own code and tools.
+Other guides: `SELECT topic, title FROM dnspysql_guides`.
 
 ## Rules
 
-- Never execute the assembly or anything decoded from it. DnSpySql only parses; its IL interpreter (`emulate`,
-  `decryptor_calls.plaintext`, `decoded_fields`, `inline_strings`, `untamper`) computes results without running sample
-  code, and only those interpret anything: every other table and `triage()` read the file and its IL as they are. With
-  `set_setting('emulation', 0)` (or `--no-emulation`) nothing is interpreted. Never contact URLs or hosts found in a
-  sample, and defang them in reports (`hxxps://evil[.]com`).
+- Never execute the assembly or anything you decode from it. DnSpySql only parses the file; nothing here runs sample
+  code. Never contact URLs or hosts found in a sample, and defang them in reports (`hxxps://evil[.]com`).
 - Work on a copy. Annotations are saved to `<first input>.dnspysql.json`; `save()` writes to the path you give, so
   never give the original's.
 - On Windows, breakpoints, bookmarks and other dnSpy state are merged into dnSpy's `dnSpy.xml` after each statement
@@ -19,10 +18,10 @@ tables and dnSpy's breakpoint configuration. Other guides: `SELECT topic, title 
 
 ## Sessions
 
-- `SELECT open('C:/abs/path/app.dll')` loads an assembly and returns its module id. `open_bytes`, `untamper` and
-  `open_bundle_entry` add modules too. Once several are loaded, filter on `module`.
-- Memory is only released by closing: work sample by sample, open → `triage()` → close. `SELECT close(id)` takes a
-  module out with every module that came out of it (`modules.derived_from`: stages, the `untamper()` copy) when the
+- `SELECT open('C:/abs/path/app.dll')` loads an assembly and returns its module id. `open_bytes` (bytes you decoded
+  yourself) and `open_bundle_entry` add modules too. Once several are loaded, filter on `module`.
+- Memory is only released by closing: work sample by sample, open → query → close. `SELECT close(id)` takes a
+  module out with every module that came out of it (`modules.derived_from`: stages opened from its bytes) when the
   statement ends; `close_all()` closes everything but the project file's module. A module with unsaved edits is
   refused (save it first; undoing the edits still leaves it marked as edited). Ids are never reused. For bulk work start
   the server with `--no-project`: otherwise the first module opened holds the project file and stays open.
@@ -60,13 +59,12 @@ SELECT signature, mutates, description FROM dnspysql_functions WHERE name LIKE '
 - Equality filters on `pushdown` columns are answered by the engine; other filters run after the scan. Add `LIMIT`
   while exploring.
 - `callers` includes calls that reach a method through a base or interface method it overrides or implements
-  (`via` = `virtual` or `interface`) or through proxies, static methods that only pass their arguments on
-  (`via = 'proxy'`); `call_edges` and `xrefs` record the method the IL names, and `call_edges.target_name` the method
-  behind the proxies.
+  (`via` = `virtual` or `interface`); `call_edges` and `xrefs` record the method the IL names.
 - `decompile()`, `decompile_module()` and `il_text()` never fail a query: a failure comes back as text starting with
   `/* dnspysql:`.
-- Blobs: `length()`, `hex(substr(x, 1, 16))`, `entropy(x)`, `text_decode(x)`. `md5`/`sha1`/`sha256` return hex text
-  (`unhex()` for bytes). SQL string literals have no backslash escapes.
+- Blobs: `length()`, `hex(substr(x, 1, 16))`, `text_decode(x [, 'utf-16le'])`, `int_at(x, offset, size)`, and the
+  `REGEXP` family. Decoding and crypto (base64, decompress, decrypt, hashes) are not here: export the bytes
+  (`resources.data`, `read_bytes()`) and do those in your own code. SQL string literals have no backslash escapes.
 
 ## Writes
 

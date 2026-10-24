@@ -16,8 +16,6 @@ public static class GuideTables
     {
         ("basics", "Rules, sessions, handles and resolve(), schema discovery, required filters, writes and undo: read first"),
         ("explore", "Understand code: orientation, search, decompiled C# and IL, callers and the Analyzer, call graphs"),
-        ("triage", "Statically triage a sample: protection, capabilities, literals and config, report"),
-        ("unpack", "Protected and packed assemblies: anti-tamper, embedded PEs, decoding resources and payloads in SQL"),
         ("dnspy", "Hand results to dnSpy: comments, bookmarks, breakpoints, dnSpy.xml, annotated copies"),
     };
 
@@ -43,7 +41,7 @@ public static class GuideTables
     public static void Register(Session s)
     {
         s.Db.Register(new Table<Guide>("dnspysql_guides",
-                "How to use DnSpySql, for people and agents: one guide per workflow (basics, explore, triage, unpack, dnspy). " +
+                "How to use DnSpySql, for people and agents: one guide per workflow (basics, explore, dnspy). " +
                 "SELECT text FROM dnspysql_guides WHERE topic = 'basics'; the MCP server offers the same guides as prompts") { Domain = "meta" }
             .Source(c => c.Text("topic") is string t ? All.Where(g => g.Topic == t) : All)
             .Text("topic", g => g.Topic, pushdown: Pushdown.Eq)

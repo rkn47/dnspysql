@@ -232,15 +232,10 @@ public sealed class Workspace : IWriteSink, IDisposable
         return lm;
     }
 
-    // The module a stage came out of: one embedded_pes carves it from (a resource, also compressed or in pieces, or its
-    // file bytes), else one whose file holds it byte for byte (a resource read with SQL). A payload decoded by hand
-    // (decrypted, xored) is in neither: open_bytes() takes its parent as an argument.
-    int? Carrier(LoadedModule lm, byte[] bytes)
-    {
-        var hash = Convert.ToHexString(SHA256.HashData(bytes));
-        return _modules.FirstOrDefault(m => m != lm && Tables.ProtectionTables.CarvedHashes(m).Contains(hash))?.Id
-               ?? _modules.FirstOrDefault(m => m != lm && Contains(m.DiskBytes, bytes))?.Id;
-    }
+    // The module a stage came out of: one whose file holds it byte for byte (a resource or an appended blob read with
+    // SQL). A payload the agent decoded is in neither: open_bytes() takes its parent as an argument.
+    int? Carrier(LoadedModule lm, byte[] bytes) =>
+        _modules.FirstOrDefault(m => m != lm && Contains(m.DiskBytes, bytes))?.Id;
 
     // Where the blob's first 64 bytes occur, the rest compared; a bounded number of places, since crafted data (the same
     // bytes over and over) would otherwise make this quadratic.

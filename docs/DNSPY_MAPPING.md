@@ -15,8 +15,7 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | dnSpy | DnSpySql | |
 |---|---|---|
 | Assembly / module documents, in-memory modules | `modules`, `assemblies`, `binary` | ✅ |
-| Anti-tamper: the decrypted module (dnSpy needs the process: debug, then open the module from memory) | `untamper()`: the startup routine that decrypts them, interpreted over a copy of the image, the result opened as a module | ✅ |
-| Open a module from memory or from a decoded blob | `open_bytes(data [, name [, memory_layout [, parent]]])`: the blob a `decrypt`/`decompress`/`base64_decode` chain produced, or a memory dump (a native PE gives NULL and a note) | ✅ |
+| Open a module from memory or from a decoded blob | `open_bytes(data [, name [, memory_layout [, parent]]])`: bytes you decoded yourself, or a memory dump (a native PE gives NULL and a note) | ✅ |
 | Single-file bundles (the app host's embedded assemblies) | `bundle_entries`, `open_bundle_entry(path)` | ✅ |
 | Namespace nodes | `namespaces` | ✅ |
 | Type nodes (kind, visibility, layout, base, nested) | `types` | ✅ |
@@ -61,18 +60,6 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | Go to RVA / file offset | `rva_to_offset()`, `offset_to_rva()`, `file_bytes.rva` | ✅ |
 | Debug directory, Win32 resources (not shown by dnSpy) | `debug_directories` (CodeView GUID/age/path), `win32_resources` (+ version/manifest text) | ✅ |
 | Section entropy (not in dnSpy) | `pe_sections.entropy` | ✅ |
-| Configs in static/instance fields (not in dnSpy: read from the constructors' IL) | `field_inits` (strings, numbers, byte arrays from field data, string arrays, a getter's constant, arithmetic on constants, with the storing instruction; `is_default` marks the compiler's default stores; computed values are `decryptor_calls`' and `decoded_fields`') | ✅ |
-| Configs decrypted in place at startup (not in dnSpy: seen only by debugging past the decoder) | `decoded_fields` (each settings field as the decoder leaves it, interpreted after the static constructor; `error` when it stops) | ✅ |
-| Behaviour (not in dnSpy) | `capabilities` (API, import, reflection or string evidence at the call, also through proxy methods; `basis` says which; the labels in `Rules/capabilities.json`) | ✅ |
-| The literals a call is given (dnSpy: reading the IL before the call) | `call_edges.string_args` (per string parameter, the `ldstr` that pushes it: a mutex's name, a registry key, a URL) | ✅ |
-| Calls through proxy methods (de4dot's proxy call removal, without changing the code) | `call_edges.target` / `target_name` / `proxies` (the method behind up to three proxies), `callers.via = 'proxy'` | ✅ |
-| Constant arithmetic in arguments (de4dot's constant folding) | every reader of call arguments folds it (`decryptor_calls`, `string_decryptors`, `inline_strings`); `field_inits.source = 'folded'` | ✅ |
-| Turning the IL interpreter off | the `emulation` setting, `--no-emulation` | ✅ |
-| What the IL interpreter answers, calls and refuses | `emulator_model` (environment placeholders, the allowlist, blocked and nondeterministic calls) | ✅ |
-| Every call of a string decryptor and its plaintext (de4dot's string decryption, without running anything) | `decryptor_calls` (caller, offset, typed literal arguments or settings fields of known value, `plaintext` from the IL interpreter, `plaintext_kind` for a second layer), `emulate()` | ✅ |
-| Protector identification (not in dnSpy; de4dot's detection) | `protections` (marker types with decoy detection, anti-tamper, anti-debug, anti-VM, string encryption, control-flow flattening, proxy calls, IL virtualization, code-less stub assemblies, encrypted/embedded resources; each with confidence and evidence) | ✅ |
-| PE files inside a file that is no .NET module (not in dnSpy, which refuses to open it) | `carve_file WHERE path = '...'` (the PEs in its bytes, with `open_bytes(data)` for a .NET one) | ✅ |
-| String decryptor location (not in dnSpy; de4dot's `--strtyp`) | `string_decryptors` (static methods returning a string, a number or a byte array, ranked by call sites with constant arguments, sample arguments, `return_type`) | ✅ |
 | Byte pattern search | `byte_search WHERE pattern = '4D 5A ?? 00'` | ✅ |
 
 ### 1.4 Debug symbols
@@ -92,7 +79,6 @@ Entities are addressed by `handle` = `module << 32 | metadata token`, as describ
 | `.resources` elements (strings, primitives, byte[], streams, serialized) | `resource_elements` | ✅ |
 | Image / icon / ImageListStreamer preview | `resource_images` (image resources, images in `.resources`, serialized Bitmap/Icon/ImageListStreamer read without deserializing; `data` is the image file) | ✅ |
 | BAML → XAML | `baml` table (`xaml` column, dnSpy's BAML decompiler) | ✅ |
-| Embedded executables (not in dnSpy) | `embedded_pes` (PE files in the file bytes, resources and `.resources` entries, also behind gzip/zlib/deflate or split across numbered resources), `open_bytes(data)` for a .NET one (one module per payload; `modules.origin`, `derived_from`); a PE inside another carve names it (`parent_offset`); `resources.content_type` | ✅ |
 
 ### 1.6 Decompiler
 
@@ -187,7 +173,7 @@ any debugger stops there.
 | Edit Assembly (name, version, culture, public key, hash alg, flags) | `UPDATE assemblies SET …` (rename fixes AssemblyRefs like dnSpy) | ✅ |
 | Edit Module (name, MVID, kind, runtime version, machine, characteristics, COR20 flags, entry point) | `UPDATE modules SET …` | ✅ |
 | Create Assembly / NetModule, convert, add/remove netmodule | — | ❌ |
-| Remove assembly from workspace (Close, Close All) | `close(module [, with_derived])` (with the stages and `untamper()` copy that came out of it), `close_all([keep_first])`; frees the memory, refused while a module has unsaved edits | ✅ |
+| Remove assembly from workspace (Close, Close All) | `close(module [, with_derived])` (with the stages that came out of it), `close_all([keep_first])`; frees the memory, refused while a module has unsaved edits | ✅ |
 | Strip strong name (common RE task) | `strip_strong_name()` | ✅ |
 
 ### 2.2 Namespaces
@@ -235,7 +221,6 @@ any debugger stops there.
 | max stack / init locals | `UPDATE methods SET max_stack, init_locals` | ✅ |
 | Copy/paste instructions between methods | — (re-insert via `il_insert`) | ❌ |
 | Replace all ldstr | `replace_string(old, new)` | ✅ |
-| Decrypted strings in the code (not in dnSpy; what de4dot is run for before opening a sample in it) | `inline_strings([module [, decryptor [, mode]]])`: each call site `decryptor_calls` interprets to a string becomes `ldstr`, undoable; `save()` then hands dnSpy a readable copy; `mode` 'comment' or 'both' writes plaintexts as comments where the code cannot or must not change | ✅ |
 
 ### 2.5 C# compiler (Roslyn)
 

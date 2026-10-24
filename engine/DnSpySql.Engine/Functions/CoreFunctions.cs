@@ -106,35 +106,6 @@ public static class CoreFunctions
             "close_all([keep_first])",
             "close() every module: all but the one holding the project file (all of them with --no-project), and with keep_first = 1 " +
             "all but the first one open. For bulk work: open a batch, analyze it, close_all(), the next batch. Returns the ids closed", "session");
-        // Anti-tamper keeps method bodies encrypted in the file until a startup routine decrypts them in memory:
-        // interpreting that routine over a copy of the image (Emulator.Untamper) gives the decrypted file.
-        s.Fn("untamper", 0, 3, a =>
-        {
-            var lm = ws.ModuleArg(a.Arg(0));
-            dnlib.DotNet.MethodDef init;
-            if (Values.ToLong(a.Arg(2)) is long ih)
-                init = lm.Module.ResolveToken(Handle.Token(ws.Normalize(ih))) as dnlib.DotNet.MethodDef ?? throw new SqlException("initializer is not a method");
-            else if (lm.Origin == "untamper") // its routine already ran: again, it would decrypt the decrypted bodies
-                throw new SqlException($"module {lm.Id} is untamper()'s decrypted copy of module {lm.DerivedFrom}; untamper that one " +
-                                       "(pass another initializer for the bodies still encrypted), or pass the initializer to run one here anyway");
-            else if (Tables.HexTables.Undecodable(lm).Count == 0) // found by shape only: nothing encrypted means nothing to look for
-                throw new SqlException("every method body already decodes as IL: nothing to untamper (pass the initializer to run it anyway)");
-            else
-                init = AntiTamperInitializer(s, lm)
-                       ?? throw new SqlException("no anti-tamper initializer (a static method calling Marshal.GetHINSTANCE and VirtualProtect)");
-            byte[] image;
-            try { image = new Emulator(s, () => s.Db.Cancellation).Untamper(init); }
-            catch (Emulator.Failed e) { throw new SqlException(e.Message); }
-            var name = Values.ToText(a.Arg(1)) ?? Path.GetFileNameWithoutExtension(lm.Path) + ".untampered" + Path.GetExtension(lm.Path);
-            var opened = s.OpenBytes(image, name, false, lm, init.MDToken.Raw);
-            // the routine may decrypt only part of the image (or with a key that came out wrong): say so, the module is still useful
-            int left = Tables.HexTables.Undecodable(opened).Count, total = Tables.HexTables.Bodies(opened).Count;
-            if (left > 0) s.Notices.Add($"untamper: {left} of {total} method bodies of module {opened.Id} still do not decode as IL (see method_bodies)");
-            return (long)opened.Id;
-        }, "untamper([module [, name [, initializer]]])",
-            "decrypt the method bodies of an anti-tampered module by interpreting the routine that decrypts them at startup (found: a " +
-            "static method using Marshal.GetHINSTANCE and VirtualProtect; or the initializer given) over a copy of the image, and open " +
-            "the result as a new module; the sample never runs. Returns the new module's id", "session");
         s.Fn("use_module", 1, 1,a => { s.SetSetting("current_module", Values.ToText(a[0])); return (long)ws.CurrentModuleId; },
             "use_module(id)", "module used for bare tokens", "session");
         s.Fn("save", 1, 2, a =>
@@ -288,13 +259,4 @@ public static class CoreFunctions
     // A parameterless static method that takes the module's base address (Marshal.GetHINSTANCE) and makes it writable
     // (a VirtualProtect P/Invoke, called directly or through a wrapper): a self-decrypting startup routine. The module
     // initializer type (<Module>) is searched first, since its static constructor runs before anything else.
-    internal static dnlib.DotNet.MethodDef? AntiTamperInitializer(Session s, LoadedModule lm)
-    {
-        bool CallsProtect(dnlib.DotNet.MethodDef m, int depth) => s.Index.From(lm.H(m)).Any(x => x.IsCall && x.Def is dnlib.DotNet.MethodDef d
-            && (d.ImplMap?.Name.String == "VirtualProtect" || depth < 2 && d.HasBody && CallsProtect(d, depth + 1)));
-        return lm.Module.GetTypes().OrderBy(t => t.IsGlobalModuleType ? 0 : 1).SelectMany(t => t.Methods)
-            .FirstOrDefault(m => m.IsStatic && !m.IsStaticConstructor && m.HasBody && m.MethodSig?.Params.Count == 0
-                                 && s.Index.From(lm.H(m)).Any(x => x.ToName.Contains("Marshal::GetHINSTANCE(", StringComparison.Ordinal))
-                                 && CallsProtect(m, 0));
-    }
 }

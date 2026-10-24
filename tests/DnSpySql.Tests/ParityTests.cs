@@ -455,16 +455,11 @@ public sealed class ParityTests : IDisposable
     [Fact]
     public void Data_functions()
     {
+        // the SQL utilities for reading what the tables return (decode and crypto are the agent's own, not dnSpy)
         Assert.Equal(1L, Long("SELECT 'abc123' REGEXP '[0-9]+$'"));
         Assert.Equal("443", Scalar("SELECT regexp_extract('example.org:443', ':(\\d+)', 1)"));
-        Assert.Equal("hello", Scalar("SELECT text_decode(base64_decode('aGVs bG8'))"));
-        Assert.Null(Scalar("SELECT base64_decode('***')"));
-        Assert.Equal("secret", Scalar("SELECT text_decode(xor(xor('secret', 'k3y'), 'k3y'))"));
+        Assert.Equal("example[.]org", Scalar("SELECT regexp_replace('example.org', '\\.', '[.]')"));
         Assert.Equal("hé", Scalar("SELECT text_decode(text_encode('hé', 'utf-16le'), 'utf-16le')"));
-        Assert.Equal("hello", Scalar("SELECT text_decode(decompress(unhex('789ccb48cdc9c90700062c0215')))"));
-        // after a 4-byte length (BitConverter.GetBytes(size) + stream)
-        Assert.Equal("hello", Scalar("SELECT text_decode(decompress(unhex('05000000789ccb48cdc9c90700062c0215')))"));
-        Assert.Equal("01020361", Scalar("SELECT hex(concat_bytes(x'01', x'0203', 'a'))")); // stays a blob, unlike ||
         // a NUL inside text survives the native boundary both ways (as a blob on the way out)
         Assert.Equal("410042", Scalar("SELECT hex(text_decode(x'410042'))"));
         Assert.Equal(3L, Long("SELECT length(text_decode(x'410042'))"));
@@ -473,32 +468,8 @@ public sealed class ParityTests : IDisposable
         Assert.Equal(0x01020304L, Long("SELECT int_at(x'01020304', 0, 4, 'be')"));
         Assert.Equal(0x0302L, Long("SELECT int_at(x'01020304', 1, 2)"));
         Assert.Null(Scalar("SELECT int_at(x'01', 0, 4)")); // past the end
-        // a wrong key: NULL, so a query can try several keys
-        Assert.Null(Scalar("SELECT decrypt(x'00112233445566778899AABBCCDDEEFF', 'aes', x'000102030405060708090A0B0C0D0E0F')"));
-        Assert.Equal(1L, Long("SELECT count(*) FROM dnspysql_functions WHERE name = 'concat_bytes'"));
-        Assert.Equal(16L, Long("SELECT max_args FROM dnspysql_functions WHERE name = 'concat_bytes'"));
-        // LZMA "alone": properties, the size in 8 bytes (or 4, a variant), the stream (Python's lzma encoder)
-        Assert.Equal("lzma alone: hello hello hello", Scalar("SELECT text_decode(decompress(x'5D000080001D0000000000000000361E89DD7D491493BC92B7691DAB1B8AA01B620C4E5CFFFFFC2A3000', 'lzma'))"));
-        Assert.Equal("lzma alone: hello hello hello", Scalar("SELECT text_decode(decompress(x'5D000080001D00000000361E89DD7D491493BC92B7691DAB1B8AA01B620C4E5CFFFFFC2A3000', 'lzma'))"));
-        Assert.Null(Scalar("SELECT decompress(x'5D0000800027000000000000000000112233', 'lzma')")); // not a stream of that size
-        Assert.Null(Scalar("SELECT decompress(x'0102')"));         // not compressed: NULL, not an empty blob
-        Assert.Null(Scalar("SELECT decompress(x'1F8B0000', 'gzip')")); // broken: NULL, not an error that stops the query
-        // NIST SP 800-38A F.1.1, RFC 6070, and the classic RC4 'Key'/'Plaintext' vector.
-        Assert.Equal("6BC1BEE22E409F96E93D7E117393172A", Scalar("SELECT hex(decrypt(unhex('3ad77bb40d7a3660a89ecaf32466ef97'), 'aes', unhex('2b7e151628aed2a6abf7158809cf4f3c'), NULL, 'ecb', 'none'))"));
-        Assert.Equal("0C60C80F961F0E71F3A9B524AF6012062FE037A6", Scalar("SELECT hex(pbkdf2('password', 'salt', 1, 20))"));
-        Assert.Equal("8D189946A32D883622A16AE18AF0632F5791D5E7", Scalar("SELECT hex(pbkdf2('password', 'salt', 1000, 20, 'md5'))")); // Python's hashlib
-        // past the one-call fast path: the cancellable loop, two output blocks
-        Assert.Equal("6D6D801BD564457CD49519BDC5C823303A0A795768CC53DD371E73A987E3433AD204F6A52945DB4A",
-            Scalar("SELECT hex(pbkdf2('password', 'salt', 200001, 40, 'sha256'))"));
-        Assert.Equal("BBF316E8D940AF0AD3", Scalar("SELECT hex(decrypt('Plaintext', 'rc4', 'Key'))"));
-        Assert.Equal("0cc175b9c0f1b6a831c399e269772661", Scalar("SELECT md5('a')"));
-        Assert.NotNull(_s.Error("SELECT decrypt(x'00', 'aes', x'0011')"));
-        // trial decryption: every failure is NULL, so one odd value does not stop the query
-        Assert.Null(Scalar("SELECT try_decrypt(x'00', 'aes', randomblob(32), x'00', 'cbc')"));
-        Assert.Null(Scalar("SELECT try_decrypt(x'00', 'aes', x'0011')"));
-        Assert.Null(Scalar("SELECT try_decrypt(x'00', 'blowfish', x'0011')"));
-        Assert.Equal(Scalar("SELECT hex(decrypt('Plaintext', 'rc4', 'Key'))"), Scalar("SELECT hex(try_decrypt('Plaintext', 'rc4', 'Key'))"));
-        Assert.Equal("6BC1BEE22E409F96E93D7E117393172A", Scalar("SELECT hex(try_decrypt(unhex('3ad77bb40d7a3660a89ecaf32466ef97'), 'aes', unhex('2b7e151628aed2a6abf7158809cf4f3c'), NULL, 'ecb', 'none'))"));
+        // decode and crypto helpers are gone from the SQL surface
+        Assert.Equal(0L, Long("SELECT count(*) FROM dnspysql_functions WHERE name IN ('base64_decode', 'xor', 'decrypt', 'decompress', 'pbkdf2', 'md5', 'entropy')"));
     }
 
     [Fact]

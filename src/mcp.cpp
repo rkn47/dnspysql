@@ -20,49 +20,27 @@ namespace {
 using json = nlohmann::json;
 
 const char* kQueryDoc =
-    "Run SQL (SQLite dialect) against the loaded .NET assemblies. How-to guides for each workflow: the dnspysql_guide tool "
-    "(or SELECT text FROM dnspysql_guides WHERE topic = 'basics'; topics basics, explore, triage, unpack, dnspy); read basics first. "
-    "Tables mirror dnSpy: modules, types, methods, fields, params, "
-    "properties, events, custom_attributes, typerefs, memberrefs, user_strings, resources, resource_elements, il, locals, "
-    "exception_handlers, blocks, cfg_edges, xrefs, call_edges, callers, callees, string_refs, analyze (TVF), pseudocode, "
-    "pseudocode_lines, pseudocode_refs, baml, search (TVF), jump_entities, pe_*, md_*, file_bytes, byte_search, method_bodies, heap_entries, "
-    "file_map, resource_images, api_docs, protections, string_decryptors, pdb_*, comments, bookmarks, tags, kv, breakpoints, module_breakpoints, exception_settings, "
+    "Run SQL (SQLite dialect) over .NET assemblies: dnSpy's model (dnlib metadata, its decompiler, its windows and "
+    "settings) as tables. How-to guides: the dnspysql_guide tool (or SELECT text FROM dnspysql_guides WHERE topic = 'basics'; "
+    "topics basics, explore, dnspy); read basics first. "
+    "Tables mirror dnSpy: modules, types, methods, fields, params, properties, events, custom_attributes, typerefs, "
+    "memberrefs, user_strings, resources, resource_elements, il, locals, exception_handlers, blocks, cfg_edges, xrefs, "
+    "call_edges, callers, callees, string_refs, analyze (TVF), pseudocode, pseudocode_lines, pseudocode_refs, baml, "
+    "search (TVF), jump_entities, pe_*, md_*, file_bytes, byte_search, method_bodies, heap_entries, file_map, resource_images, "
+    "api_docs, pdb_*, comments, bookmarks, tags, kv, breakpoints, module_breakpoints, exception_settings, "
     "dnspy_debugger_settings, dnspy_watch, dnspy_documents, dnspy_tabs. Entities are keyed by `handle` (module<<32 | metadata token). "
     "Discover with: SELECT * FROM dnspysql_tables; SELECT * FROM dnspysql_columns WHERE table_name='...'; SELECT * FROM dnspysql_functions. "
     "Tables marked required_filter need that WHERE clause (e.g. pseudocode WHERE handle = ...). "
-    "Decompilation uses dnSpy's own engine (decompile(handle), pseudocode). "
-    "Data helpers for decoding configs/payloads: REGEXP, regexp_extract, base64_decode, text_decode(blob,'utf-16le'), xor, concat_bytes (|| makes text of blobs), decompress, "
-    "decrypt(data, 'aes'|'des'|'3des'|'rc2'|'rc4', key, iv, mode, padding) (try_decrypt: NULL instead of an error, for trying a key "
-    "over many values), pbkdf2, sha256, entropy. "
-    "Triage: field_inits (constants stored by constructors: the config as the IL holds it), capabilities (injection, persistence, "
-    "download/execute, ... at the call; basis = api | import | resolved by name | string; bp_set(method, offset) breaks there), "
-    "string_refs and call_edges.string_args (every literal, and the literals each call is given: mutex names, registry keys, URLs; "
-    "judging what is an indicator is yours; call_edges.target_name is the method behind proxies, static methods that only pass "
-    "their arguments on, and callers lists those calls with via = 'proxy'), emulator_model (what the interpreter answers, calls and "
-    "refuses), embedded_pes (PE files in "
-    "the file bytes and resources, also compressed: SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet opens each next stage, one "
-    "module per payload; carve_file WHERE path = ... does the same for a native file open() refuses). "
-    "What only interpreting the IL gives (computed instruction by instruction, the sample never runs; off with set_setting('emulation', 0)): "
-    "decryptor_calls (each decryptor call with its arguments and its plaintext; emulation says why when it cannot; SELECT inline_strings() "
-    "puts the plaintexts into the code as ldstr, undoable, so decompile() and a saved copy show them), decoded_fields (settings decrypted "
-    "in place at startup, the key from another field: the values the program uses), emulate(method, args...) for any static method. "
-    "split_text cuts delimited configs, int_at(blob, offset, size) reads integers from containers. "
-    "When protections reports anti-tamper (method bodies encrypted until runtime), SELECT untamper() decrypts them statically "
-    "and returns a new module id to analyze instead (modules.origin = 'untamper', derived_from = the original). It has every name "
-    "of the original: follow handles, or use_module(id) first, since resolve() searches the current module first. "
-    "Triage a sample with SELECT name, kind, confidence, evidence FROM protections (protector, decoy markers, anti-debug/anti-VM, "
-    "anti-tamper, string encryption, control flow, proxy calls, IL virtualization, a stub assembly without code, encrypted "
-    "resources) and string_decryptors (ranked candidates; "
-    "breakpoints on one show plaintext in dnSpy). "
-    "SELECT value FROM binary WHERE key='anomalies' lists packer/protector hints (overlay, wiped headers, anti-tamper); method_bodies "
-    "(invalid headers, IL that does not decode), file_map (gaps and their entropy) and resource_images "
-    "(images in resources; data is the image file, for a payload hidden in its pixels) show them in detail. pseudocode_refs WHERE handle = ... maps names in decompiled code to handles "
-    "and gives the decompiled variable names to use in breakpoint conditions; api_docs WHERE member = ... explains framework calls. "
+    "Decompilation uses dnSpy's own engine (decompile(handle), pseudocode). SQL utilities for reading what the tables "
+    "return: REGEXP / regexp_extract / regexp_replace, text_decode(blob,'utf-16le'), int_at(blob, offset, size). "
+    "method_bodies flags bodies whose IL does not decode; file_map is the hex view's byte ranges; resource_images reads "
+    "images in resources; pseudocode_refs WHERE handle = ... maps names in decompiled code to handles and gives the "
+    "decompiled variable names for breakpoint conditions; api_docs WHERE member = ... explains framework calls. "
     "Writes (UPDATE/INSERT/DELETE, set_body_stub, compile_method, edit_type, il_*, ...) are journaled: undo(n)/redo(n). "
-    "For an analysis-only task, SELECT set_setting('read_only', 1) first: every write is then refused for the rest of the "
+    "For a read-only task, SELECT set_setting('read_only', 1) first: every write is then refused for the rest of the "
     "session (it cannot be switched off). "
-    "Load a sample with SELECT open('path'); it is only parsed, never run. A payload decoded with the data helpers loads as a module "
-    "of its own with SELECT open_bytes(blob, 'name') (e.g. open_bytes(decompress(data)) on a resource). "
+    "Load a sample with SELECT open('path'); it is only parsed, never run. Bytes carried by a module load as a module of "
+    "their own with SELECT open_bytes(blob, 'name'). "
     "Memory is only released by SELECT close(id), which takes a module and every stage that came out of it out of the session: "
     "with several samples, close each one when you are done with it. "
     "Annotate for dnSpy: set_comment(handle, [il_offset,] text), tag(handle, tag), INSERT INTO bookmarks (handle, offset, name, "
@@ -260,7 +238,7 @@ private:
                                {"instructions", kQueryDoc}});
         }
         if (method.rfind("notifications/", 0) == 0) return std::nullopt;
-        // The workflow guides as prompts: a client offers them to the user (/triage, ...), with the assembly as an argument.
+        // The workflow guides as prompts: a client offers them to the user (/explore, ...), with the assembly as an argument.
         if (method == "prompts/list") {
             json prompts = json::array();
             for (const auto& row : rows("SELECT topic, title, description FROM dnspysql_guides"))
@@ -289,12 +267,12 @@ private:
                 {"format", {{"type", "string"}, {"enum", {"table", "json", "tsv"}}, {"description", "default table"}}},
             };
             json schema_props = {{"table", {{"type", "string"}, {"description", "table name; omit for the table list"}}}};
-            json guide_props = {{"topic", {{"type", "string"}, {"description", "basics, explore, triage, unpack or dnspy; omit for the list"}}}};
+            json guide_props = {{"topic", {{"type", "string"}, {"description", "basics, explore or dnspy; omit for the list"}}}};
             return result(id, {{"tools", json::array({
                 tool("dnspysql_query", kQueryDoc, query_props, {"sql"}),
                 tool("dnspysql_schema", "Describe tables (all, or one table's columns) and SQL functions", schema_props),
                 tool("dnspysql_guide", "How to use DnSpySql for a task: rules, handles, workflows and the queries for them. "
-                     "Read 'basics' first, then the guide for the task (explore, triage, unpack, dnspy)", guide_props),
+                     "Read 'basics' first, then the guide for the task (explore, dnspy)", guide_props),
                 // Names of earlier DnSpySql versions.
                 tool("sql", "Run SQL; same as dnspysql_query with a `query` argument and JSON output",
                      {{"query", {{"type", "string"}, {"description", "SQL to run"}}}}, {"query"}),

@@ -99,15 +99,6 @@ public sealed class FrontEndTests : SampleTest
     }
 
     [Fact]
-    public void Timeout_stops_a_huge_pbkdf2()
-    {
-        var sw = Stopwatch.StartNew();
-        var r = Exec("--no-project", "--timeout", "1000", "-c", "SELECT hex(pbkdf2('password', 'salt', 2000000000, 32, 'sha256'))", Sample);
-        Assert.Contains("interrupted", r.stdout);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(30));
-    }
-
-    [Fact]
     public void Repl_runs_dot_commands_and_multi_line_sql()
     {
         using var p = Start(["--no-project", Sample], stdin: true);
@@ -211,11 +202,11 @@ public sealed class FrontEndTests : SampleTest
         // The workflow guides: as prompts (with the assembly as an argument) and through the dnspysql_guide tool.
         Assert.True(init.GetProperty("capabilities").TryGetProperty("prompts", out _));
         var prompts = JsonDocument.Parse(Send("""{"jsonrpc":"2.0","id":7,"method":"prompts/list"}""")).RootElement.GetProperty("result").GetProperty("prompts");
-        Assert.Equal(["basics", "explore", "triage", "unpack", "dnspy"], prompts.EnumerateArray().Select(x => x.GetProperty("name").GetString()));
-        var triage = JsonDocument.Parse(Send("""{"jsonrpc":"2.0","id":8,"method":"prompts/get","params":{"name":"triage","arguments":{"path":"C:/cases/x.exe"}}}"""))
+        Assert.Equal(["basics", "explore", "dnspy"], prompts.EnumerateArray().Select(x => x.GetProperty("name").GetString()));
+        var explore = JsonDocument.Parse(Send("""{"jsonrpc":"2.0","id":8,"method":"prompts/get","params":{"name":"explore","arguments":{"path":"C:/cases/x.exe"}}}"""))
             .RootElement.GetProperty("result").GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString()!;
-        Assert.StartsWith("Work on this assembly: C:/cases/x.exe", triage);
-        Assert.Contains("# Triage", triage);
+        Assert.StartsWith("Work on this assembly: C:/cases/x.exe", explore);
+        Assert.Contains("# ", explore);
         Assert.Contains("\"code\":-32602", Send("""{"jsonrpc":"2.0","id":9,"method":"prompts/get","params":{"name":"nope"}}"""));
         Assert.Contains("dnspysql_guide", tools);
         var basics = JsonDocument.Parse(Send("""{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"dnspysql_guide","arguments":{"topic":"basics"}}}"""))

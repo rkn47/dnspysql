@@ -9,7 +9,7 @@
 ![Platforms: Windows x64, Linux x64](https://img.shields.io/badge/platforms-Windows%20x64%20%7C%20Linux%20x64-informational.svg)
 ![.NET 8](https://img.shields.io/badge/.NET-8-512BD4.svg)
 
-[Build](#build) · [Quick start](#quick-start) · [Usage](#usage) · [Schema](#schema) · [dnSpy hand-off](#handing-results-to-dnspy) · [Triage](#triage-and-protected-assemblies) · [How it works](#how-it-works)
+[Build](#build) · [Quick start](#quick-start) · [Usage](#usage) · [Schema](#schema) · [dnSpy hand-off](#handing-results-to-dnspy) · [File bytes](#reading-the-file-bytes) · [How it works](#how-it-works)
 
 </div>
 
@@ -19,8 +19,8 @@ shows as SQLite virtual tables.
 
 - **Everything dnSpy shows, as tables:** metadata, IL, cross-references and the analyzer, decompiled code with its
   line ↔ IL mapping, resources and BAML, PE headers and raw bytes, PDB data, and dnSpy's breakpoint configuration.
-- **Triage:** tables name the protector, list capabilities, literals and config values as the IL holds them, and, when
-  asked, interpret what string decryptors return without running the sample.
+- **One objective:** an SQL interface to dnSpy's model. It maps the model to tables and does not analyse for you;
+  triage, config extraction and unpacking are the agent's own work, with these tables plus its own code.
 - **Edits:** `UPDATE`/`INSERT`/`DELETE` and functions change the live dnlib model, are journaled for
   `undo()`/`redo()`, and are written back with `save()`, preserving tokens.
 - **dnSpy hand-off:** comments, bookmarks and breakpoints go to dnSpy; the output and its line numbers are dnSpy's.
@@ -37,16 +37,13 @@ shows as SQLite virtual tables.
 dnspysql App.dll -c "SELECT full_name, method_count FROM types ORDER BY method_count DESC LIMIT 5"
 dnspysql App.dll -c "SELECT caller_name FROM callers WHERE method = resolve('App.License::IsValid')"
 dnspysql App.dll -c "SELECT text FROM pseudocode WHERE handle = resolve('App.License::IsValid')"
-dnspysql App.dll -c "SELECT name, kind, confidence, evidence FROM protections"
 dnspysql App.dll -c "SELECT set_body_stub(resolve('App.License::IsValid'), 1)" -c "SELECT save('App.patched.dll')"
 dnspysql App.dll -c "SELECT bp_set(resolve('App.License::IsValid'))" -c "SELECT bp_export('C:/dnSpy/dnSpy.xml')"
 ```
 
 > [!IMPORTANT]
-> **Safety.** DnSpySql parses the files it loads and never runs them, nor anything decoded from them (`open_bytes`,
-> `untamper`, `embedded_pes`). The IL interpreter behind `decryptor_calls`, `field_inits`, `emulate()` and `untamper()`
-> computes results itself and never runs sample code: calls into the framework are limited to an allowlist of
-> in-memory computation, and P/Invoke, files, the registry and the network stop it ([details](#the-il-interpreter)).
+> **Safety.** DnSpySql parses the files it loads and never runs them, nor anything you decode from them
+> (`open_bytes` only parses the bytes you give it).
 >
 > It writes only:
 > - the project file beside the first input, once you annotate (`--no-project` keeps annotations in memory);
@@ -80,15 +77,10 @@ exporter.
     - [Kept in step with dnSpy](#kept-in-step-with-dnspy)
   - [Annotated assemblies for dnSpy](#annotated-assemblies-for-dnspy)
   - [Exporting a project](#exporting-a-project)
-- [Triage and protected assemblies](#triage-and-protected-assemblies)
-  - [Triage](#triage)
-    - [The IL interpreter](#the-il-interpreter)
-  - [Decompiling protected assemblies](#decompiling-protected-assemblies)
-    - [Anti-tamper](#anti-tamper)
-    - [Decrypted strings in the code](#decrypted-strings-in-the-code)
-    - [The file's own bytes](#the-files-own-bytes)
-    - [Decompiler robustness](#decompiler-robustness)
-    - [Damaged headers, overlays and bundles](#damaged-headers-overlays-and-bundles)
+- [Reading the file bytes](#reading-the-file-bytes)
+  - [The file's own bytes](#the-files-own-bytes)
+  - [Decompiler robustness](#decompiler-robustness)
+  - [Damaged headers, overlays and bundles](#damaged-headers-overlays-and-bundles)
 - [How it works](#how-it-works)
 - [Credits and third-party software](#credits-and-third-party-software)
 - [Contributing](#contributing)
@@ -201,7 +193,6 @@ dnspysql [options] <assembly|module|exe>...
 | `--remote URL` | send `-c`/`-f` SQL to a running DnSpySql HTTP server instead (uses `--token`, `--format`) |
 | `--ref DIR` | extra directory with referenced assemblies (repeatable; e.g. .NET Framework refs on Linux) |
 | `--readonly` | refuse every write (tables and functions) |
-| `--no-emulation` | start with the `emulation` setting off: no IL is interpreted (`emulate()`, `decryptor_calls.plaintext`, `decoded_fields`, `inline_strings`, `untamper()` say so); `set_setting('emulation', 1)` turns it back on |
 | `--project PATH` | annotation store (default: `<first input>.dnspysql.json`) |
 | `--no-project` | keep annotations in memory only |
 | `--dnspy-xml PATH` | dnSpy settings file kept in step with breakpoints/bookmarks: `auto` (default), `off`, or a path |
@@ -239,7 +230,7 @@ every dnSpy window and command to it.
 
 ### Tables
 
-Every table and view, by area (103 in all; click an area to open it). *writes* lists what the table
+Every table and view, by area (93 in all; click an area to open it). *writes* lists what the table
 accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused with `--readonly`. Columns are in
 [docs/SCHEMA.md](docs/SCHEMA.md).
 
@@ -319,7 +310,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 | `callers` |  | Who calls a method (`WHERE method = ...`), also through a base or interface method it overrides or implements (`via`) |
 | `dispatch_calls` |  | Virtual calls that can reach a method through a base or interface method it overrides or implements (dnSpy's Virtual Used By) |
 | `string_refs` |  | String literals with their referrers: ldstr in IL, string constants, string attribute arguments (dnSpy StringSearcher) |
-| `xrefs` |  | Every IL reference: calls, field read/write/addr, type and token uses, ldstr. Filter on from_method, to_def or to_name. Bodies that are not IL (encrypted until runtime, see method_bodies) are left out: SELECT untamper() first |
+| `xrefs` |  | Every IL reference: calls, field read/write/addr, type and token uses, ldstr. Filter on from_method, to_def or to_name. Bodies that are not IL (encrypted until runtime, see method_bodies) are left out |
 | `callees` |  | *View.* What a method calls (`WHERE method = ...`); external callees have `callee = 0` |
 | `entry_points` |  | *View.* Managed entry points, module initializers and static constructors of every module |
 | `external_calls` |  | *View.* Calls leaving the loaded modules, grouped by target (imports-like view) |
@@ -330,20 +321,10 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 </details>
 
 <details>
-<summary><b>Triage: protection, capabilities, configs</b> (10)</summary>
+<summary><b>Triage: protection, capabilities, configs</b> (0)</summary>
 
 | table | writes | description |
 |---|---|---|
-| `capabilities` |  | What the code does, at the call or literal that shows it: injection, persistence, download and execute, keylogging, capture, credential theft and more |
-| `carve_file` |  | PE files in any file's bytes, for a file `open()` refuses (a native dropper): `WHERE path = '...'`, then `open_bytes(data)` of a .NET one (needs `WHERE path = ...`) |
-| `decoded_fields` |  | Settings as the program decrypts them at startup: a settings class's fields after the method that decodes them in place (key from another field), interpreted |
-| `decryptor_calls` |  | Every call of a string decryptor with literal arguments (or settings fields of known value): what it decrypts (interpreted), where to break, whether it is still ciphertext |
-| `embedded_pes` |  | PE files inside a module: in its file bytes (overlay, sections), in resources and `.resources` entries, also compressed or split across numbered resources |
-| `emulator_model` |  | What the IL interpreter (emulate, decryptor_calls, decoded_fields, untamper) answers for the environment, which framework types and members it calls, and what it refuses: why a plaintext says %TEMP%\, or why an emulation stopped |
-| `field_inits` |  | Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also through a getter |
-| `protections` |  | Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques (anti-tamper, IL virtualization, a code-less stub, ...), with evidence |
-| `split_text` |  | A text cut at a `separator` (default ','), one row per piece: configs are often one delimited string (needs `WHERE text = ...`) |
-| `string_decryptors` |  | Methods shaped like a string decryptor, ranked by call sites with literal arguments |
 
 </details>
 
@@ -457,9 +438,9 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
   `'0x1_06000005'`, are accepted everywhere; bare tokens resolve against the current module (`use_module(id)`).
 - **Names.** `resolve('Ns.Type::Member')` returns a handle; an overloaded method is named with its parameter types
   (`'Ns.Type::Load(System.String)'`), and without them `resolve()` returns the first overload with a note. It
-  searches the current module first; a name in several modules (an `untamper()` copy, a stage opened twice) gets a
+  searches the current module first; a name in several modules (a stage opened twice, two copies) gets a
   note, and `resolve(name, kind, module)` picks one.
-- **Modules.** `modules.origin` says how a module was opened (`file`, `bundle`, `bytes`, `untamper`) and
+- **Modules.** `modules.origin` says how a module was opened (`file`, `bundle`, `bytes`) and
   `derived_from` which module it came out of. `close(id)` takes a module out of the session with everything that came
   out of it and frees their memory; a long session should close each sample when it is done with it. Module ids are
   never reused, so a handle into a closed module is an error, not another module's entity.
@@ -485,15 +466,14 @@ By area; signatures are in [docs/SCHEMA.md](docs/SCHEMA.md).
 | area | functions |
 |---|---|
 | handles and names | `resolve`, `handle`, `token_of`, `module_of`, `kind_of`, `name_of`, `def_of`, `tok`, `hx`, `token_name`, `use_module` |
-| session | `open`, `open_bytes` (a decoded payload as a module, named from its hash; bytes already open return that module; a native PE gives NULL and a note), `open_bundle_entry` (an assembly inside a single-file bundle), `untamper` (anti-tampered bodies, decrypted statically), `close` (a module and the stages that came out of it, freeing their memory), `close_all`, `save`, `save_raw`, `save_project`, `undo`, `redo`, `is_dirty`, `set_setting` |
+| session | `open`, `open_bytes` (bytes you decoded as a module, named from its hash; bytes already open return that module; a native PE gives NULL and a note), `open_bundle_entry` (an assembly inside a single-file bundle), `close` (a module and the stages that came out of it, freeing their memory), `close_all`, `save`, `save_raw`, `save_project`, `undo`, `redo`, `is_dirty`, `set_setting` |
 | decompiler | `decompile`, `il_text`, `decompile_module`, `export_project`, `api_doc` (dnSpy's tooltip text) |
 | raw bytes | `read_bytes`, `patch_bytes`, `method_bytes`, `rva_to_offset`, `offset_to_rva` |
-| editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `inline_strings` (decrypted strings into the code, or as comments), `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |
+| editing | `set_body_stub` (= `stub_return`), `il_set`, `il_insert`, `il_remove`, `il_nop`, `il_invert_branch`, `il_skip_branch`, `il_to_unconditional`, `il_optimize`, `il_simplify`, `replace_string`, `rename_namespace`, `delete_namespace`, `import_member`, `add_reference_type`, `strip_strong_name`, `set_assembly`, `add_resource`, `set_resource_data`, `resource_set_empty` |
 | C# compiler | `compile_method`, `add_members`, `add_type`, `edit_type`, `compile_preview` |
 | annotations | `set_comment`, `tag` |
-| triage | `triage` (the first look at a module as one JSON object, static: protections, payloads, string decryptors, capabilities, config candidates, settings decoders, next queries) |
 | breakpoints | `bp_set`, `bp_trace`, `bp_set_line`, `bp_set_decompiled`, `bp_toggle`, `bp_enable`, `bp_clear`, `bp_module`, `break_on_exception`, `bp_patch`, `bp_export` (= `export_dnspy_breakpoints`), `bp_import` (= `import_dnspy_breakpoints`), `dnspy_sync` |
-| data | `regexp`, `regexp_extract`, `regexp_replace`, `base64_decode`, `base64_encode`, `text_decode`, `text_encode`, `xor`, `concat_bytes`, `int_at` (little/big-endian integers in a blob), `emulate` (a static method on literal arguments, interpreted), `decompress` (gzip, zlib, deflate, brotli, LZMA; detects gzip and zlib, also after a 4-byte length), `decrypt` (AES/DES/3DES/RC2/RC4), `try_decrypt` (NULL instead of an error, for trial decryption over many values), `aes_decrypt`, `pbkdf2`, `md5`, `sha1`, `sha256`, `entropy` |
+| data | `regexp`, `regexp_extract`, `regexp_replace`, `text_decode`, `text_encode` (utf-8/16/32, ascii, latin1), `int_at` (little/big-endian integers in a blob). Decoding and crypto (base64, decompress, decrypt, hashes) are the agent's own: export the bytes and do them in your own code |
 
 ## Handing results to dnSpy
 
@@ -602,136 +582,20 @@ export, the result is for reading and editing; code that uses newer C# features 
 SELECT export_project('/cases/sample42/src');
 ```
 
-## Triage and protected assemblies
+## Reading the file bytes
 
-### Triage
+Some tables read the file's own bytes, the way dnSpy's hex view does, so packing and damage show up even where the
+decompiler only sees garbage. Deciding what the bytes mean — a config, a payload, ciphertext — and decoding them is
+the agent's own work, done with these tables, the SQL utilities (`REGEXP`, `text_decode`, `int_at`) and its own code.
 
-These tables answer the first questions about a sample without a page of joins over `il` and `xrefs`. Every row
-points at the IL (or the bytes) that show it, so `decompile()`, `bp_set(method, offset)` and `set_comment` take it
-from there. They read the IL as it is, except `decoded_fields` and `decryptor_calls.plaintext`, which interpret it
-(below). Deciding which literals are indicators (hosts, URLs, keys, names) is left to you: `string_refs` has every
-literal, and `call_edges.string_args` the literals each call is given (`SELECT dst_name, string_args FROM call_edges
-WHERE string_args IS NOT NULL AND is_external`: a mutex's name, a registry key, a URL).
-
-What counts as an argument is the same everywhere (`string_decryptors`, `decryptor_calls`, `inline_strings`,
-`string_args`, `capabilities`, field values): the instructions that push it, found over the nops and branches to the
-next instruction obfuscators insert, and arithmetic on constants is folded to its value (`ldc 0x1234; ldc 0x1235;
-xor` is the argument 1). A call through proxies (static methods that only pass their arguments on, which obfuscators
-put in front of every API) names the method behind them in `call_edges.target` / `target_name` (`proxies` says how
-many), and `callers` lists it with `via = 'proxy'`.
-
-| table | what it finds |
-|---|---|
-| `field_inits` | The constants constructors store in fields (strings, numbers, byte arrays from field data, string arrays), also through a getter or as arithmetic on constants (`source`: literal, getter, folded). Malware settings classes are filled this way, so the host, port, mutex and key are usually one query away. `is_default` marks the compiler's stores of 0, false and "" for fields with an explicit initializer. A value a call computes is not here: `decryptor_calls` and `decoded_fields` interpret it. |
-| `capabilities` | What the code does, at the call or string that shows it: process injection and hollowing, persistence, download and execute, in-memory loading, keylogging, screen capture, webcam and audio capture, credential theft, defense tampering, recovery inhibition, UAC bypass, hosts-file tampering, removable-drive spreading, shellcode execution, single instance, self-deletion, and network use (`SELECT DISTINCT kind FROM capabilities` lists what a sample has). APIs looked up by name (`GetProcAddress`, `GetMethod`) count too, and a call made through a proxy (a static method that only passes its arguments on, which obfuscators put in front of every API) is reported where the proxy is called. `basis` says what a row rests on: `api` (a call), `import` (a P/Invoke), `resolved by name`, or `string` (a fragment of a literal: a judgment, not a call). The labels are one list, `engine/DnSpySql.Engine/Rules/capabilities.json`; the facts behind them are `call_edges` and `pinvokes`. Call graphs (`callers`, `xrefs`) link an async method or iterator to its state machine's `MoveNext` (`kind = 'async'`), so a capability found there leads back to the method that started it. |
-| `decoded_fields` | Interpreted. Settings the program decrypts at startup: a class whose static constructor stores string literals (usually ciphertext) and a parameterless static method that reads them and writes them back through a call, often with a key derived from another field (`Host = Decrypt(Host)`). The decoder is interpreted after the static constructor, and each field it changed has a row with its `initial` and decoded `value`; `error` says why a decoder stopped. Nothing here names a family: it is the shape settings code has. |
-| `embedded_pes` | Every PE a module carries: anywhere in its file bytes (the overlay, a section) and in resources or `.resources` entries, also behind gzip, zlib or deflate (Costura's compressed references, a loader's payload). The size comes from the PE headers, so `SELECT open_bytes(data) FROM embedded_pes WHERE is_dotnet` opens each next stage, named from its hash; a native one has its `machine` and `kind` (open_bytes leaves it out with a note). A PE stored in pieces across numbered resources or `.resources` entries (`part1`..`part3`, `chunk_00.bin`, ...) is put back together: the pieces joined in order or reversed, as bytes or as base64 text (also reversed), plain or compressed; `location` says which pieces and how they were joined. |
-| `decryptor_calls` | Every call of a string decryptor (`string_decryptors`, or any method with `WHERE decryptor =`) with literal arguments (also a static field of known value: a constant, or, interpreted, what its static constructor computes into it or its `decoded_fields` value, so `Decode(Config.Host)` is interpreted; `args_from = 'field'`), typed in `arg0`..`arg3`, and its `plaintext`: computed by interpreting the decryptor's IL when the column is read (`emulation` says why when it cannot be). `plaintext_kind = 'ciphertext'` marks a plaintext that is base64 of more ciphertext, a second layer another method decrypts. `emulate(method, args...)` does the same for any static method. |
-
-`SELECT triage()` (or `triage(module)`) puts these together as one JSON object, the first look at a sample in one
-call: its identity and anomalies, protections, embedded PEs, string decryptors, capabilities by kind, config
-candidates grouped by type, settings decoders, resources, and the queries to run next. It is static: it interprets
-nothing, and its `next` list names `decryptor_calls` and `decoded_fields` when there is something for them to
-interpret. Library code is left out, and each list says how many entries it had.
-
-```sql
-SELECT field_name, value FROM field_inits WHERE kind IN ('string', 'int') AND type_name LIKE '%Settings%';
-SELECT kind, api, method_name, offset FROM capabilities WHERE NOT is_library ORDER BY kind;
-SELECT src_name, dst_name, string_args FROM call_edges WHERE string_args IS NOT NULL AND is_external;
-SELECT idx, value FROM split_text WHERE text = 'host|port|mutex' AND separator = '|';
-SELECT caller_name, offset, args, plaintext FROM decryptor_calls WHERE emulation = 'ok';
-SELECT field_name, value, decoder_name FROM decoded_fields WHERE field IS NOT NULL;
-SELECT emulate(resolve('App.Strings::Decode'), 'cGF5bG9hZA==');
-```
-
-#### The IL interpreter
-
-The interpreter never runs the sample. It reads IL and computes the result itself, and only where it is asked to:
-`emulate()`, `decryptor_calls.plaintext`, `decoded_fields`, `inline_strings()` and `untamper()`. With the `emulation`
-setting off (`--no-emulation`, or `set_setting('emulation', 0)`) each of them says so instead, and the session is
-metadata, IL and decompiled code only.
-
-- **Calls into the sample** are interpreted the same way, including static constructors, struct-based decompressors
-  and lambdas passed to LINQ. The module initializer runs first, as in the CLR, and a thread the code starts is not
-  run. Pointers reach the module's own image (what anti-tamper routines decrypt) and `stackalloc` memory.
-- **Calls into the framework** are made only for an allowlist of types that compute on data in memory: strings,
-  encodings, conversions, arrays, hashes and ciphers, in-memory and compression streams. VB's late-bound calls
-  (`obj.Name(args)` on an `Object`) are bound by name the same way, and `typeof(T)` answers what generic code asks of
-  it (element type, `Array.CreateInstance`).
-- **Reflection** over the code's own metadata (`GetMethod`, `Invoke`, `CreateDelegate`, `FieldInfo.SetValue`, tokens
-  resolved through the module) works on descriptions, never on real `MethodInfo`s: an invoked sample method is
-  interpreted, a framework one goes through the allowlist.
-- **The environment:** what the code asks of the machine is answered from one list, which `emulator_model` shows
-  with the allowlist and what is refused: machine-specific values are placeholders (`%TEMP%\`, `%USERNAME%`,
-  `%APPDIR%\` for the sample's own location), anti-debug checks get a process without a debugger, and what only
-  takes time or sets up a UI (`Thread.Sleep`, `Application.EnableVisualStyles`) returns at once.
-- **Data:** the sample's own resources are read from the file. An assembly the code loads from bytes is parsed, never run; its methods are interpreted
-  when the code calls them. A sample's own LZMA decoder is interpreted like any other code; on data it decodes,
-  `decompress(data, 'lzma')` gives the same result natively.
-- **What stops it:** anything else, such as P/Invoke, the registry or the network, stops the emulation with the
-  reason, as does a body that is still encrypted in the file and a random or time-dependent value (the result would
-  differ on every run). A method whose calls each use the whole step budget is not tried again after three of them,
-  and its remaining call sites say so.
-
-On a corpus of 210 .NET malware samples it computes 98% of the decryptor call sites (19,301 of 19,722), and every one
-of them in 74 samples.
-
-### Decompiling protected assemblies
-
-Start with what protected it. `protections` names the protector from its marker types (ConfuserEx, SmartAssembly,
-Babel, Dotfuscator, Agile.NET, Goliath, Costura) and flags markers planted in the wrong namespace as decoys. It also
-lists the techniques it finds, each with a confidence and the evidence: renamed members, anti-tamper (bodies that are
-encrypted until runtime), anti-debug and anti-VM checks, string encryption, control-flow flattening, proxy calls, IL
-virtualization (methods that only hand an id and their arguments to one dispatcher, whose code is VM bytecode; their
-`decompile()` says so), a stub assembly with no method body (its code is in what it carries, or an encrypted
-section), and encrypted or embedded resources. Methods of a C++/CLI image are native code, not encrypted bodies.
-`string_decryptors` ranks the methods shaped like a decryptor of constants: static, returning a string (or a number
-or byte array: `return_type`), and called from many sites with constant arguments. Breakpoints on one show the
-plaintext in dnSpy.
-
-```sql
-SELECT name, kind, confidence, evidence FROM protections;
-SELECT method_name, call_sites, constant_sites, sample_args FROM string_decryptors ORDER BY score DESC LIMIT 5;
-```
-
-#### Anti-tamper
-
-Anti-tamper keeps method bodies encrypted in the file until a startup routine decrypts them in memory, so the
-decompiler and every table above see garbage. `untamper()` interprets that routine over a copy of the image
-(`GetHINSTANCE` points into the copy, `VirtualProtect` and anti-debug checks are answered, nothing runs) and opens the
-result as a new module, on which everything works, string decryption included:
-
-```sql
-SELECT untamper();                                         -- returns the new module's id, say 2
-SELECT plaintext FROM decryptor_calls WHERE module = 2 AND emulation = 'ok';
-SELECT field_name, value FROM decoded_fields WHERE module = 2;
-SELECT inline_strings(2);                                  -- the plaintexts as ldstr in the code (undoable)
-SELECT save(2, 'C:/work/sample.untampered.exe');           -- a readable copy for dnSpy
-```
-
-It decrypts 33 of the 37 anti-tampered samples in that corpus, typically in about 3 seconds; the others use a
-different scheme or stop the interpreter, and say why. A module whose bodies all decode is refused (nothing to
-untamper) unless the initializer is passed, and when bodies still do not decode afterwards a note says how many. The
-copy is marked (`modules.origin = 'untamper'`, `derived_from`), so `protections` and `triage()` on it do not suggest
-`untamper()` again, and the interpreter does not run the decryption routine a second time when the copy's static
-constructor calls it.
-
-#### Decrypted strings in the code
-
-`inline_strings([module [, decryptor [, mode]]])` replaces every call site that `decryptor_calls` interprets to a
-string with `ldstr` of the plaintext; its literal arguments become nops. A site that code jumps into (flattened control
-flow, where other paths pass other arguments) is left as it is, with a note. It is one undoable step, and the
-decompiled code and a saved copy then show the strings. With `mode = 'both'` such a site gets the plaintext as a
-comment instead, and `'comment'` comments every site and leaves the code alone; `save()` writes the comments for dnSpy.
-
-#### The file's own bytes
+### The file's own bytes
 
 Some tables read the file's own bytes, the way dnSpy's hex view does, so packing, encryption and stego show up even
 where the decompiler only sees garbage:
 
 | table | what it shows |
 |---|---|
-| `method_bodies` | each body's header (tiny, fat or invalid), exception sections, whether the IL decodes, and bodies that share or overlap another; anti-tamper protectors leave hundreds of invalid bodies |
+| `method_bodies` | each body's header (tiny, fat or invalid), exception sections, whether the IL decodes, and bodies that share or overlap another; a protector that encrypts bodies until runtime leaves many that do not decode |
 | `file_map` | what every byte range is, and the gaps no structure accounts for, with their entropy |
 | `heap_entries` | metadata heap entries nothing references, and slack after the last one |
 | `resource_images` | images in resources (serialized bitmaps included, read without deserializing), with the image file in `data` for a payload hidden in its pixels |
@@ -742,7 +606,7 @@ SELECT path, size, entropy FROM file_map WHERE kind = 'gap' AND NOT all_zero ORD
 SELECT element, format, width, height, length(data) FROM resource_images;
 ```
 
-#### Decompiler robustness
+### Decompiler robustness
 
 The decompiler reads the dnlib model, so it handles metadata that a `System.Reflection.Metadata` reader rejects —
 including control-flow-flattened code and zero-width-Unicode names. Even so, `decompile`, `decompile_module` and
@@ -768,7 +632,7 @@ FROM types;
 - **Caching.** `decompile()` and `pseudocode` results are cached until the module is next edited, so a query that
   uses the same result several times decompiles it once.
 
-#### Damaged headers, overlays and bundles
+### Damaged headers, overlays and bundles
 
 - **Wiped headers.** Some samples destroy the CLI header while the metadata itself is intact, and native-stub
   protectors also wipe the metadata root's `BSJB` signature and stream names (restoring them in memory at startup).
@@ -792,9 +656,8 @@ FROM types;
   shared frameworks of the runtime DnSpySql runs on. Decompiler transforms such as `async`/`await` reconstruction
   need those types, so without them a .NET (Core) assembly would show raw compiler state machines.
 
-`SELECT value FROM binary WHERE key = 'anomalies'` lists everything above that looks like a protector or packer: wiped
-headers, decoy or renamed metadata streams, encrypted bodies, high-entropy sections, invisible names, anti-tamper
-imports and overlays.
+`SELECT value FROM binary WHERE key = 'anomalies'` lists what the loader noticed in the file: wiped
+headers, decoy or renamed metadata streams, bodies that do not decode, high-entropy sections and overlays.
 
 > [!CAUTION]
 > Files next to a sample are input too. dnSpy's decompiler and `api_docs` read the XML documentation next to an

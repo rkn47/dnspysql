@@ -71,20 +71,17 @@ public sealed class BinaryTests : SampleTest
     }
 
     [Fact]
-    public void A_decoded_blob_opens_as_a_module_of_its_own()
+    public void A_blob_opens_as_a_module_of_its_own()
     {
-        // an assembly stored gzip-compressed: decoded with SQL and opened from the blob
-        using var ms = new MemoryStream();
-        using (var gz = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionLevel.Optimal, leaveOpen: true))
-            gz.Write(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "sample", "SampleTarget.dll")));
+        // bytes an agent decoded (here read from disk) open as a module from the blob
+        var payload = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "sample", "SampleTarget.dll"));
         using var live = new Live(Sample, "--no-project");
-        var id = live.Long($"select open_bytes(decompress(x'{Convert.ToHexString(ms.ToArray())}'), 'decoded.dll')");
+        var id = live.Long($"select open_bytes(x'{Convert.ToHexString(payload)}', 'decoded.dll')");
         Assert.Equal(2, id);
         Assert.Equal("decoded.dll", live.Scalar("select path from modules where id = 2"));
         Assert.True(live.Long("select count(*) from types where module = 2") > 5);
         Assert.Contains("class MemberCard", (string)live.Scalar("select decompile(handle) from types where module = 2 and name = 'MemberCard'")!);
         Assert.Contains("not a .NET assembly", live.Error("select open_bytes(x'4D5A0000')"));
-        Assert.Null(live.Scalar("select open_bytes(decompress(x'0102'))")); // the decode step failed: NULL, not an error
         Assert.Contains("already open with other bytes", live.Error($"select open_bytes(x'{Convert.ToHexString(File.ReadAllBytes(Sample))}', 'decoded.dll')"));
     }
 

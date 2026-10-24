@@ -16,8 +16,6 @@ public sealed class SessionOptions
     public List<string> ReferencePaths { get; set; } = new();
     /// <summary>dnSpy settings file kept in step with breakpoints/bookmarks: null = auto, "off", or a path (CLI --dnspy-xml).</summary>
     public string? DnSpyXml { get; set; }
-    /// <summary>Start with the emulation setting off (CLI --no-emulation): nothing is interpreted.</summary>
-    public bool NoEmulation { get; set; }
 }
 
 /// <summary>A DnSpySql session: workspace + services; SQLite itself lives in the native host.</summary>
@@ -39,8 +37,6 @@ public sealed class Session : IDisposable
     /// <summary>Messages for the caller about the current statement (sidecar files written, dnSpy.xml synced).</summary>
     public List<string> Notices { get; } = new();
     public Dictionary<string, RuntimeSetting> Settings { get; } = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Bumped when the emulation setting changes, for the caches of interpreted results.</summary>
-    public int EmulationEpoch { get; private set; }
     /// <summary>Columns (name, declared type) of the SQL views in <see cref="Tables.Views"/>, for the catalog.</summary>
     public Dictionary<string, List<(string name, string type)>> ViewColumns { get; } = new(StringComparer.OrdinalIgnoreCase);
     readonly object _lock = new();
@@ -172,7 +168,6 @@ public sealed class Session : IDisposable
         Ws.Close(closed);
         Index.Reset();
         Decompiler.Forget(closed);
-        Emulator.Reset(this);
         return closed;
     }
 
@@ -287,15 +282,6 @@ public sealed class Session : IDisposable
         Add("max_modules", "int", "0",
             "most modules open at once (0 = no limit): opening one more is refused with a reminder to close() the samples you are done with",
             (v, _) => { Ws.MaxModules = Math.Max(0, Int(v)); return v; });
-        Add("emulation", "bool", Options.NoEmulation ? "0" : "1",
-            "interpret IL (never run it): emulate(), decryptor_calls.plaintext, decoded_fields, inline_strings and untamper() (--no-emulation). " +
-            "0: metadata, IL, decompiled code and the other static tables only; those say emulation is off",
-            (v, old) =>
-            {
-                // what was interpreted (or refused) under the other value is not kept
-                if (v != old) { Emulator.Reset(this); EmulationEpoch++; }
-                return v;
-            });
         Add("read_only", "bool", Options.ReadOnly ? "1" : "0",
             "session refuses writes (--readonly); can be switched on, never off: set it to 1 to lock a session for analysis only",
             (v, _) =>

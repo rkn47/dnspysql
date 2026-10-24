@@ -120,7 +120,7 @@ public sealed class DnSpyTableTests : SampleTest
     }
 
     [Fact]
-    public void Native_methods_of_a_mixed_mode_image_are_not_anti_tamper()
+    public void Native_method_bodies_of_a_mixed_mode_image_are_recognised()
     {
         // what a C++/CLI image looks like: methods whose code type is Native, their RVA pointing at machine code
         var r = Run("select method & 0xFFFFFF as rid, file_offset from method_bodies order by code_size desc limit 6",
@@ -135,12 +135,9 @@ public sealed class DnSpyTableTests : SampleTest
         }
         var mixed = PathIn("Mixed.dll");
         File.WriteAllBytes(mixed, bytes);
-        var m = Cli.Run(mixed, "select count(*), sum(il_status = 'native') from method_bodies where format = 'native'",
-            "select count(*) from protections where kind = 'anti-tamper'", "select triage()").Ok();
+        var m = Cli.Run(mixed, "select count(*), sum(il_status = 'native') from method_bodies where format = 'native'").Ok();
         Assert.Equal(6, m.Values(0)[0].GetInt64());
         Assert.Equal(6, m.Values(0)[1].GetInt64());
-        Assert.Equal(0, m.Long(1));
-        Assert.DoesNotContain("untamper", m.Text(2));
     }
 
     [Fact]
