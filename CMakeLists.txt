@@ -1,6 +1,6 @@
 # DnSpySql - Copyright (C) 2026 Rakan Alduwaysan. GPL-3.0-only with additional terms: see LICENSE and NOTICE.
 cmake_minimum_required(VERSION 3.20)
-project(dnspysql VERSION 0.0.2 LANGUAGES C CXX)
+project(dnspysql VERSION 0.0.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
