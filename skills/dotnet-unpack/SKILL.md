@@ -1,76 +1,92 @@
 ---
 name: dotnet-unpack
-description: Unpack and deobfuscate a protected .NET assembly with DnSpySql — find embedded or packed payloads, recover decrypted strings, and get a readable module for dnSpy. Use when a .NET sample is obfuscated, packed, or carries another PE. DnSpySql exposes the dnSpy model as SQL; locating a payload or decryptor is a query, decoding it is your own code.
+description: Unpack a protected .NET assembly with DnSpySql — read the signs of packing, find embedded or packed payloads (resources, overlays, gaps, images, single-file bundles), find the loader, decode in your own code and open each stage as a module, stage by stage. Use when a .NET sample is obfuscated, packed, decompiles to garbage, has a high-entropy resource, or carries another PE. DnSpySql exposes the dnSpy model as SQL; locating a payload or decryptor is a query, decoding it is your own code.
 ---
 
 # Unpacking a protected .NET assembly with DnSpySql
 
 DnSpySql maps dnSpy's model to SQL tables. It finds structure for you (bodies that do not decode, byte ranges, string
 literals, call graphs); it does not decode, decrypt or devirtualize — you do that in your own code, then bring the
-result back in with `open_bytes`. Never run the sample or a payload you extract.
+result back in with `open_bytes`, which only parses. Never run the sample or a payload you extract, and never write a
+decoded payload where it could be launched unless the user asks for the file.
 
-Read `SELECT text FROM dnspysql_guides WHERE topic = 'basics'` first.
+Read `SELECT text FROM dnspysql_guides WHERE topic = 'basics'` first; the `dotnet-triage` skill covers the rest of
+the analysis. No DnSpySql tools at all: follow `INSTALL.md` in the DnSpySql repository (https://github.com/rkn47/dnspysql).
 
-## Spot the protection
+## 1. What is there
 
 ```sql
-SELECT key, value FROM binary WHERE key = 'anomalies';          -- wiped headers, high-entropy sections, overlays
+SELECT value FROM binary WHERE key = 'anomalies';                -- wiped headers, high-entropy sections, overlays
 SELECT format, il_status, count(*) FROM method_bodies GROUP BY 1, 2;   -- many non-decoding bodies: encrypted until runtime
-SELECT path, size, entropy FROM file_map WHERE kind = 'gap' AND NOT all_zero ORDER BY size DESC;
+SELECT file_name, repair, overlay, overlay_size, overlay_kind, overlay_entropy FROM modules;
+SELECT name, size, content_type, sha256 FROM resources ORDER BY size DESC;
+SELECT resource, name, type, size, content_type FROM resource_elements WHERE size > 1000 ORDER BY size DESC;
+SELECT name, raw_size, entropy FROM pe_sections;
+SELECT path, size, entropy FROM file_map WHERE kind = 'gap' AND NOT all_zero ORDER BY size DESC LIMIT 10;
+SELECT heap, count(*), sum(length) FROM heap_entries WHERE kind = 'slack' OR NOT referenced GROUP BY heap;
+SELECT path, kind, size, compressed_size FROM bundle_entries;
 ```
 
-Decompiled code of a protected method reads as garbage or empty; `decompile()` adds a `/* dnspysql: */` note when a
-body does not decode.
+| signal | meaning | go to |
+|---|---|---|
+| many bodies with `il_status` other than `ok`/`native`, `<Module>` P/Invokes `VirtualProtect` (`anomalies`) | anti-tamper: bodies decrypted in memory at startup | §4 |
+| resource `content_type` `pe`, `high entropy`, `gzip`, `zlib`, `deflate` | an embedded, encrypted or compressed payload | §2 |
+| `resource_images` rows a loader reads pixel by pixel | a payload in pixels | §2 |
+| `modules.overlay`, `file_map` gaps with entropy > 7, `heap_entries` slack | appended or hidden data | §2 |
+| `bundle_entries` rows | a single-file app: the real assemblies are inside | §2 |
+| one static method called from many sites with constants | string encryption | `dotnet-deobfuscate` |
+| invisible or bidi names, proxy calls, flattened control flow | readability, not packing | `dotnet-deobfuscate` |
 
-## Find an embedded or packed payload
+## 2. Find the payload
 
 ```sql
--- a PE carried in a resource (MZ header), as bytes or base64
-SELECT name, size, content_type FROM resources WHERE content_type IN ('pe', 'high entropy', 'gzip', 'zlib');
--- a PE appended after the image (overlay) or elsewhere in the file
-SELECT overlay_offset, overlay_size, overlay_kind FROM modules WHERE overlay_size > 0;
-SELECT offset FROM byte_search WHERE pattern = '4D 5A 90 00';   -- MZ, inside the file bytes
+SELECT hex(substr(data, 1, 16)), length(data) FROM resources WHERE name = '<name>';   -- 4D5A = MZ
+SELECT hex(read_bytes(overlay_offset, 16)), overlay_kind FROM modules WHERE overlay_size > 0;
+SELECT offset, rva, section FROM byte_search WHERE pattern = '4D 5A 90 00';          -- MZ inside the file bytes
+SELECT resource, element, format, width, height, length(data) FROM resource_images;  -- the image file in data
+SELECT open_bundle_entry('Payload.dll');                                              -- an assembly inside a bundle
 ```
 
-Export the bytes (`resources.data`, `read_bytes(offset, size)`), decode them in your own code if they are compressed
-or encrypted (read the loader with `decompile()` to learn how), and open the result:
+`resources.data`, `resource_elements.value`, `read_bytes(offset, size)` and `resource_images.data` hand out the bytes
+as they are. A wiped CLI header or metadata signature is repaired when the file loads (`modules.repair` says what was
+done).
+
+## 3. Find the loader, decode, open
+
+Find who reads the payload and what it does with the bytes:
 
 ```sql
-SELECT open_bytes(x'<decoded hex>', 'stage2.dll');   -- a new module id; then analyse it with WHERE module = <id>
+SELECT from_name, offset FROM xrefs WHERE kind = 'string' AND string_value = '<resource name>';
+SELECT from_name, offset, to_name FROM xrefs
+ WHERE to_name LIKE '%GetManifestResourceStream%' OR to_name LIKE '%ResourceManager::Get%' OR to_name LIKE '%Assembly::Load%';
+SELECT decompile(<loader method>);
 ```
 
-A payload split across several resources, or encoded (base64, xor, gzip, a custom scheme), is reassembled and decoded
-in your own code — join the pieces, decode, then `open_bytes`.
-
-## Recover encrypted strings
-
-Protected samples route strings through a decryptor: a static method called from many sites with constant arguments,
-returning a string.
+Rebuild its pipeline (base64, xor, AES/DES/RC4, gzip/zlib/LZMA, pixel order, a split across numbered resources) in your
+own code over the exported bytes. Check every intermediate step before going further: its length, its first bytes, its
+entropy (it drops after decryption). For pixels, read the loader's loop (channel order, rows or columns first, where a
+length sits) and decode the image file the same way. Then open what comes out:
 
 ```sql
--- candidates by shape: static, string-returning, many call sites with constant (ldc/ldstr) arguments before them
-SELECT m.handle, m.full_name, count(*) AS sites
-FROM methods m JOIN call_edges c ON c.dst = m.handle
-WHERE m.is_static AND m.return_type = 'System.String'
-GROUP BY 1, 2 HAVING sites > 10 ORDER BY sites DESC;
-SELECT text FROM pseudocode WHERE handle = <the decryptor>;   -- read its algorithm
-SELECT i.offset, i.opcode, i.operand_text FROM il i WHERE i.method = <a caller> ORDER BY i.idx;  -- the arguments
+SELECT open_bytes(x'<decoded hex>', 'stage2.dll', 0, 1);   -- a new module id; parent = the module it came from
+SELECT open_bytes(x'<dump hex>', 'dumped.dll', 1);         -- memory_layout = 1: an image dumped from memory
 ```
 
-Reimplement the decryptor in your own code from what `decompile()` shows, run it over the arguments there (never run
-the sample's own code), and write the plaintexts back as comments so the decompiled view and a saved copy show them:
-`SELECT set_comment(<caller handle>, <offset>, 'decrypted: "..."')`. To rename or restructure, use the `UPDATE` and
-`il_*` edit functions; all edits are journaled (`undo`/`redo`) and written out with `save()`.
+`open_bytes()` returns NULL with a note for a native PE (report its machine and SHA-256 instead), and the module already
+open when the bytes are the same.
 
-## Anti-tamper and virtualization
+## 4. Anti-tamper and virtualization
 
-- **Bodies encrypted until runtime** (many `method_bodies` with `il_status` other than `ok`/`native`): the startup
-  routine decrypts them in memory. Read it with `decompile()`, reproduce the decryption in your own code over the
-  file bytes (`read_bytes`), and `open_bytes` the rebuilt image. DnSpySql will not run the routine for you.
-- **IL virtualization** (a method hands an id and its arguments to one dispatcher): devirtualizing is specific to each
-  VM and is out of scope for the SQL interface — handle it with a dedicated tool.
+- **Bodies encrypted until runtime**: the startup routine (usually called from `<Module>::.cctor`) decrypts them in
+  memory. Read it with `decompile()`, reproduce the decryption in your own code over the file bytes (`read_bytes`), and
+  `open_bytes` the rebuilt image. DnSpySql will not run the routine for you.
+- **IL virtualization** (methods hand an id and their arguments to one dispatcher): devirtualizing is specific to each
+  VM and out of scope for the SQL interface — say so in the report, or use a dedicated tool.
 
-## Hand off
+## 5. After each stage
 
-`save('readable.dll')` writes the edited, renamed, commented module plus its sidecars for dnSpy (see the `dnspy`
-guide). Close modules you are done with: `SELECT close(id)`.
+A new module is a new sample: run the `dotnet-triage` steps on it with `WHERE module = <id>`, and `dotnet-deobfuscate`
+when it is obfuscated. Record the chain (`INSERT INTO kv VALUES ('stages', '1 -> res x.bin aes+gzip -> 2')`) and report
+each stage's SHA-256 (`SELECT sha256 FROM modules WHERE id = <id>`). When a value only exists at runtime (a stage
+decrypted in memory, a key from the machine), the `dotnet-debug-prep` skill prepares a dnSpy session for the user.
+Close modules you are done with: `SELECT close(id)`.

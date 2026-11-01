@@ -72,10 +72,10 @@ public static class MetaTables
                 doc: "file path dnSpy exports name for this module (the last save() of it, else where it was loaded from); dnSpy binds breakpoints by this path")
             .Text("dnspy_assembly_full_name", m => m.Module.Assembly?.FullName ?? "",
                 doc: "assembly name dnSpy matches breakpoints and bookmarks against (with dnspy_target)")
-            .Text("origin", m => m.Origin, doc: "file | bundle (an entry of a single-file app) | bytes (open_bytes) | untamper (the decrypted copy untamper() made)")
+            .Text("origin", m => m.Origin, doc: "file | bundle (an entry of a single-file app) | bytes (open_bytes)")
             .Int("derived_from", m => m.DerivedFrom,
-                doc: "the module this one came out of: the one untamper() decrypted, one embedded_pes carves these bytes from (also compressed or " +
-                     "in pieces) or whose file holds them as they are, or the parent given to open_bytes(); NULL otherwise. It may name a module closed since");
+                doc: "the module this one came out of: one whose file holds these bytes as they are, or the parent given to open_bytes(); " +
+                     "NULL otherwise. It may name a module closed since");
         db.Register(modules);
 
         // ---- assemblies ----
@@ -341,7 +341,7 @@ public static class MetaTables
         yield return ("feature.il", "yes", "il/locals/exception_handlers/blocks/cfg_edges tables; IL edit via il table + il_* functions");
         yield return ("feature.xrefs", "yes", "xrefs/call_edges/callers/callees/string_refs built from IL");
         yield return ("feature.analyzer", "yes", "analyze(): dnSpy analyzer relations (uses, used_by, read_by, assigned_by, ...)");
-        yield return ("feature.decompiler", "yes", "dnSpyEx decompiler (dnlib-backed ILSpy fork, vendored): csharp, il; BAML to XAML");
+        yield return ("feature.decompiler", "yes", "dnSpyEx decompiler (dnlib-backed ILSpy fork, vendored): csharp, vb, il; BAML to XAML");
         yield return ("feature.compile", "yes", "Roslyn: compile_method / add_members / add_type (dnSpy Edit Method / Add Class Members / Add Class (C#))");
         yield return ("feature.pe", "yes", "pe_* headers, sections, data directories, metadata streams/tables/heaps");
         yield return ("feature.pdb", "yes", "sequence_points, pdb_locals, pdb_documents when a PDB is present");

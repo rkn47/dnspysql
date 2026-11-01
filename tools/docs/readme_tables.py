@@ -11,7 +11,6 @@ import argparse, json, os, subprocess, sys
 
 # README section per catalog domain, in order. A new domain must be added here (the script stops otherwise).
 ORDER = [("meta", "Session and assembly"), ("metadata", "Metadata"), ("code", "Code"), ("xrefs", "Cross-references and call graph"),
-         ("triage", "Triage: protection, capabilities, configs"),
          ("decompiler", "Decompiler"), ("search", "Search"), ("resources", "Resources"), ("pe", "PE file and raw metadata"),
          ("pdb", "Debug information (PDB)"), ("annotations", "Annotations"), ("breakpoints", "Breakpoints for dnSpy"),
          ("dnspy", "dnSpy's own state (dnSpy.xml)")]
@@ -36,9 +35,7 @@ SHORT = {
     "user_strings": "The `#US` heap: every `ldstr` literal of the module",
     "callers": "Who calls a method (`WHERE method = ...`), also through a base or interface method it overrides or implements (`via`)",
     "dispatch_calls": "Virtual calls that can reach a method through a base or interface method it overrides or implements (dnSpy's Virtual Used By)",
-    "dnspysql_guides": "How to use DnSpySql, one guide per workflow (basics, explore, triage, unpack, dnspy); the MCP server offers them as prompts",
-    "embedded_pes": "PE files inside a module: in its file bytes (overlay, sections), in resources and `.resources` entries, also compressed or split across numbered resources",
-    "carve_file": "PE files in any file's bytes, for a file `open()` refuses (a native dropper): `WHERE path = '...'`, then `open_bytes(data)` of a .NET one",
+    "dnspysql_guides": "How to use DnSpySql's tables (basics, explore, dnspy); the MCP server offers them as prompts",
     "callees": "What a method calls (`WHERE method = ...`); external callees have `callee = 0`",
     "entry_points": "Managed entry points, module initializers and static constructors of every module",
     "pseudocode_refs": "Names in the decompiled source and what they refer to (dnSpy's click-to-definition): members, locals, parameters, labels",
@@ -47,13 +44,6 @@ SHORT = {
     "file_map": "Every byte range of the file and what it is (dnSpy's hex view), with the gaps no structure accounts for; `WHERE contains = <offset>`",
     "resource_images": "Images in resources, including serialized Bitmap/Icon/ImageListStreamer (read without deserializing), with the image file in `data`",
     "api_docs": "XML documentation of a referenced type or member (dnSpy's tooltips)",
-    "protections": "Protectors (ConfuserEx, SmartAssembly, ...; decoy markers flagged) and protection techniques (anti-tamper, IL virtualization, a code-less stub, ...), with evidence",
-    "string_decryptors": "Methods shaped like a string decryptor, ranked by call sites with literal arguments",
-    "decoded_fields": "Settings as the program decrypts them at startup: a settings class's fields after the method that decodes them in place (key from another field), interpreted",
-    "decryptor_calls": "Every call of a string decryptor with literal arguments (or settings fields of known value): what it decrypts (interpreted), where to break, whether it is still ciphertext",
-    "field_inits": "Constants constructors store in fields (where malware settings live): strings, numbers, byte and string arrays, also through a getter",
-    "capabilities": "What the code does, at the call or literal that shows it: injection, persistence, download and execute, keylogging, capture, credential theft and more",
-    "split_text": "A text cut at a `separator` (default ','), one row per piece: configs are often one delimited string",
     "dnspy_debugger_settings": "dnSpy's debugger options, including its anti-anti-debug protections; UPDATE value to set one",
     "dnspy_watch": "Expressions in dnSpy's Watch windows; INSERT adds one for the next debugging session",
     "dnspy_documents": "The assemblies dnSpy opens at startup; `save()` adds the annotated copy",

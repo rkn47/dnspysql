@@ -9,12 +9,24 @@ is marked **ask**. What DnSpySql can do once installed: [README.md](README.md).
 DnSpySql only parses the assemblies it loads; it never runs them. Don't run a sample to "test" the installation
 either: the checks below use DnSpySql's own engine DLL, and the tests use the benign assemblies in `tests/corpus`.
 
-## 0. Choose a path
+## 0. Is it already there? Choose a path
+
+Check first, and stop at the first hit:
+
+- The harness already has DnSpySql's MCP tools (`dnspysql_query`, `dnspysql_schema`; in Claude Code
+  `mcp__dnspysql__dnspysql_query`): run `SELECT sqlite_version()` with them. If that answers, DnSpySql is installed and
+  connected.
+- `claude mcp get dnspysql` (or the client's configuration file) shows a registration: if its status is *Failed*, see
+  Troubleshooting; otherwise start a new session so the tools appear.
+- A built binary exists: `dnspysql` on `PATH`, or `<checkout>/build/dnspysql(.exe)` with `build/engine/` beside it.
+  Ask the user where their checkout is rather than searching the disk; with a binary, go to step 5.
+
+Otherwise build it:
 
 | host | path |
 |---|---|
 | Windows x64 | native build: steps 1–5 |
-| Linux x64 | native build: steps 1–5, or [Docker](#alternative-docker) without a toolchain on the host |
+| Linux x64 | native build: steps 1–5, or [Docker](#alternative-docker) without a toolchain on the host, or to sandbox each hostile sample |
 | macOS, ARM64 | not supported; use Docker on an x64 host |
 
 The first build needs network access (submodules and NuGet packages). This repository ships source only; there are
@@ -72,7 +84,7 @@ Installing what is missing:
 ## 2. Source and submodules
 
 ```
-git clone <repository URL> dnspysql
+git clone https://github.com/rkn47/dnspysql.git dnspysql
 cd dnspysql
 git submodule update --init
 git -C external/dnSpyEx submodule update --init --depth 1 Extensions/ILSpy.Decompiler/ICSharpCode.Decompiler Extensions/ILSpy.Decompiler/NRefactory
@@ -152,7 +164,7 @@ claude mcp get dnspysql          # check: Status: Connected
 ```
 
 `--scope user` makes it available in every project; leave it out for the current project only. For one sample per
-server, put the assembly before `--mcp`.
+server, put the assembly before `--mcp`. The tools appear in a **new** session, not the one that registered them.
 
 **Clients with an `mcpServers` JSON file** (Claude Desktop: `%APPDATA%\Claude\claude_desktop_config.json`; Cursor:
 `~/.cursor/mcp.json`; Gemini CLI: `~/.gemini/settings.json`; Windsurf: `~/.codeium/windsurf/mcp_config.json`). Merge
@@ -179,18 +191,26 @@ args = ["--mcp"]
 In JSON, write Windows paths with forward slashes or doubled backslashes. If .NET is in a non-standard place, add
 `"env": { "DOTNET_ROOT": "<.NET folder>" }` to the server entry.
 
-The server offers `dnspysql_query` (SQL), `dnspysql_schema` and `dnspysql_guide` (how-to guides for each workflow,
-also offered as MCP prompts: basics, explore, triage, unpack, dnspy), and its instructions describe the analysis workflow.
+The server offers `dnspysql_query` (SQL), `dnspysql_schema` and `dnspysql_guide` (how-to guides for using the tables,
+also offered as MCP prompts: basics, explore, dnspy), and its instructions describe the SQL surface.
 Useful extra arguments, placed before `--mcp`:
 
 - `--dnspy-xml off|auto|PATH`: on Windows, DnSpySql keeps dnSpy's settings file in step with the breakpoints and
   bookmarks it sets (default `auto`: `%APPDATA%\dnSpy\dnSpy.xml`, or the `bin\dnSpy.xml` of a running portable dnSpy).
   That edits the user's dnSpy configuration: **ask** whether they want it, and pass `--dnspy-xml off` if not.
 - `--readonly` for analysis that must not change anything;
-- `--ref DIR` for directories with referenced assemblies;
+- `--no-project` to keep annotations in memory (bulk work over many samples), or `--project PATH` to store them
+  somewhere other than beside the first sample;
+- `--ref DIR` for directories with referenced assemblies (e.g. .NET Framework reference assemblies on Linux);
 - `--timeout MS` for a per-statement timeout.
 
 **Check:** in a new agent session, ask it to run `SELECT sqlite_version()` through DnSpySql.
+
+**Analysis workflows (optional).** DnSpySql maps dnSpy's model and does not analyse for the agent; the workflows built
+on these tables (triage, unpacking, deobfuscation, diffing, patching, batch runs, preparing a dnSpy debugging session)
+are agent skills, one folder each in `skills/`. For Claude Code, copy the folders into the user's skills folder
+(`~/.claude/skills/`, or `.claude/skills/` of a project); other harnesses can give the agent each `SKILL.md` as
+instructions. That changes the agent's configuration too: **ask** first.
 
 What DnSpySql writes, so the user is not surprised: once a sample is annotated, `<sample>.dnspysql.json` beside it
 (`--no-project` keeps annotations in memory); the files the agent asks for (`save()`, `export_project()`,
@@ -202,10 +222,12 @@ with dnSpy" under [Breakpoints](README.md#breakpoints) in the README.
 An agent that can run shell commands needs no registration:
 
 ```
-build/dnspysql <assembly> --no-project --format json -c "SELECT full_name FROM types LIMIT 5"
+build/dnspysql <assembly> --no-project --dnspy-xml off --format json -c "SELECT full_name FROM types LIMIT 5"
 ```
 
-`--format json` returns `{success, statement_count, results[{columns, rows, ...}]}`; `-c` can be repeated.
+`--format json` returns `{success, statement_count, results[{columns, rows, ...}]}`; `-c` can be repeated. Each
+process is a fresh session: undo, unsaved edits and opened modules end with it, so put a multi-step job in one process
+(several `-c`, or `-f script.sql`), or use the MCP or HTTP server.
 
 An agent that can only make HTTP requests can use a server the user starts:
 
@@ -235,7 +257,8 @@ and entries DnSpySql added to `dnSpy.xml`, are left in place.
 
 ## Alternative: Docker
 
-Linux, no toolchain on the host. After step 2:
+Linux, no toolchain on the host; also the safest way to work on hostile samples, one container per sample without
+network. After step 2:
 
 ```
 docker build -t dnspysql .

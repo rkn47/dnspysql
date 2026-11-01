@@ -62,8 +62,8 @@ Loaded modules (one row per assembly/netmodule file)
 | raw_patch_count | INTEGER |  |  |
 | dnspy_target | TEXT |  | file path dnSpy exports name for this module (the last save() of it, else where it was loaded from); dnSpy binds breakpoints by this path |
 | dnspy_assembly_full_name | TEXT |  | assembly name dnSpy matches breakpoints and bookmarks against (with dnspy_target) |
-| origin | TEXT |  | file \| bundle (an entry of a single-file app) \| bytes (open_bytes) \| untamper (the decrypted copy untamper() made) |
-| derived_from | INTEGER |  | the module this one came out of: the one untamper() decrypted, one embedded_pes carves these bytes from (also compressed or in pieces) or whose file holds them as they are, or the parent given to open_bytes(); NULL otherwise. It may name a module closed since |
+| origin | TEXT |  | file \| bundle (an entry of a single-file app) \| bytes (open_bytes) |
+| derived_from | INTEGER |  | the module this one came out of: one whose file holds these bytes as they are, or the parent given to open_bytes(); NULL otherwise. It may name a module closed since |
 | module | INTEGER |  | older name of id |
 | version | TEXT |  | older name of assembly_version |
 | runtime | TEXT |  | older name of runtime_version |
@@ -1585,7 +1585,7 @@ SELECT dst_assembly, dst_name, count(*) AS call_count, count(DISTINCT src) AS ca
 
 ### `method_metrics`
 
-Per-method size/complexity/fan-in/fan-out/string counts for triage (hotness_score ranking)
+Per-method size/complexity/fan-in/fan-out/string counts, ranked by hotness_score
 
 ```sql
 WITH co AS (SELECT src AS m, count(*) AS n FROM call_edges GROUP BY src),
@@ -1651,12 +1651,12 @@ SELECT dll, entry, count(*) AS method_count, group_concat(method_name, '; ') AS 
 
 | signature | writes | description |
 |---|---|---|
-| `close(module [, with_derived])` |  | take a module out of the session when you are done with it, with every module that came out of it (modules.derived_from: untamper()'s copy, stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It happens when the statement ends, with a note of the memory freed; ids are never reused, so a handle of a closed module stays an error. Refused for a module with unsaved edits (save() first: undoing them still leaves it marked as edited) and for the one holding the project file; a module edited later in the same statement stays open, with a note. Returns the ids closed, as a JSON array |
+| `close(module [, with_derived])` |  | take a module out of the session when you are done with it, with every module that came out of it (modules.derived_from: stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It happens when the statement ends, with a note of the memory freed; ids are never reused, so a handle of a closed module stays an error. Refused for a module with unsaved edits (save() first: undoing them still leaves it marked as edited) and for the one holding the project file; a module edited later in the same statement stays open, with a note. Returns the ids closed, as a JSON array |
 | `close_all([keep_first])` |  | close() every module: all but the one holding the project file (all of them with --no-project), and with keep_first = 1 all but the first one open. For bulk work: open a batch, analyze it, close_all(), the next batch. Returns the ids closed |
 | `is_dirty([module])` |  | unsaved model edits or raw patches |
 | `open(path)` |  | load another assembly/module into the session; returns its module id |
 | `open_bundle_entry(path [, module])` | yes | load an assembly embedded in a single-file bundle as another module; returns its id |
-| `open_bytes(data [, name [, memory_layout [, parent]]])` |  | load a module from a blob, such as a payload decrypted or decompressed with SQL; it is only parsed, never run. The name defaults to memory-<sha256 prefix>.dll, unique per payload; bytes already open return that module, with a note. memory_layout = 1 for an image dumped from memory. modules.derived_from names the module it came out of: found for a PE that embedded_pes carves (or one in a module's file as it is); pass parent for a payload decoded by hand. Returns its module id (NULL for NULL data, and for a native PE, with a note) |
+| `open_bytes(data [, name [, memory_layout [, parent]]])` |  | load a module from a blob, such as a resource or a payload you decoded; it is only parsed, never run. The name defaults to memory-<sha256 prefix>.dll, unique per payload; bytes already open return that module, with a note. memory_layout = 1 for an image dumped from memory. modules.derived_from names the module it came out of: found for bytes that are in a module's file as they are; pass parent for a payload decoded by hand. Returns its module id (NULL for NULL data, and for a native PE, with a note) |
 | `redo([n])` | yes | redo n undone statements |
 | `save([module,] path)` | yes | write the (edited) module with dnlib, preserving tokens (dnSpy Save Module); also writes a PDB if one was loaded. With save_sidecars (default on) it also writes <file>.xml, the comments and tags as XML documentation that dnSpyEx shows as /// comments, and <file>.dnspysql.json with the annotations, and later dnSpy exports name the saved file |
 | `save_project([path])` | yes | persist annotations (comments, bookmarks, tags, kv, breakpoints) |

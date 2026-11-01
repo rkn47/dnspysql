@@ -14,8 +14,6 @@
   <ItemGroup>
     <!-- The workflow guides (dnspysql_guides table, MCP prompts): DnSpySql.Guides.<topic>.md -->
     <EmbeddedResource Include="Guides/*.md" LogicalName="DnSpySql.Guides.%(Filename).md" />
-    <!-- Data the tables label with (capabilities): DnSpySql.Rules.<name>.json -->
-    <EmbeddedResource Include="Rules/*.json" LogicalName="DnSpySql.Rules.%(Filename).json" />
   </ItemGroup>
 
   <ItemGroup>

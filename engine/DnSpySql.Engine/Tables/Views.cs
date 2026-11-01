@@ -12,7 +12,7 @@ public static class Views
             "SELECT src AS method, dst AS callee, dst_name AS callee_name, dst_assembly, call_site, kind, is_external FROM call_edges"),
         ("external_calls", "Calls leaving the loaded modules, grouped by target (imports-like view)",
             "SELECT dst_assembly, dst_name, count(*) AS call_count, count(DISTINCT src) AS caller_count FROM call_edges WHERE is_external GROUP BY dst_assembly, dst_name"),
-        ("method_metrics", "Per-method size/complexity/fan-in/fan-out/string counts for triage (hotness_score ranking)",
+        ("method_metrics", "Per-method size/complexity/fan-in/fan-out/string counts, ranked by hotness_score",
             @"WITH co AS (SELECT src AS m, count(*) AS n FROM call_edges GROUP BY src),
                    ci AS (SELECT dst AS m, count(*) AS n FROM call_edges WHERE dst <> 0 GROUP BY dst),
                    st AS (SELECT from_method AS m, count(*) AS n FROM xrefs WHERE kind = 'string' GROUP BY from_method)

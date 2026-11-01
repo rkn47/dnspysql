@@ -24,12 +24,10 @@ public sealed class LoadedModule
     public byte[] DiskBytes => FileBytes ?? OriginalBytes;
     /// <summary>What was repaired to load this module, or null.</summary>
     public string? Repair { get; init; }
-    /// <summary>How the module was opened: file | bundle | bytes | untamper (see modules.origin).</summary>
+    /// <summary>How the module was opened: file | bundle | bytes (see modules.origin).</summary>
     public string Origin { get; internal set; } = "file";
-    /// <summary>The module this one came out of: the one untamper() decrypted, or the one whose file holds these bytes.</summary>
+    /// <summary>The module this one came out of: the one whose file holds these bytes, or the parent given to open_bytes().</summary>
     public int? DerivedFrom { get; internal set; }
-    /// <summary>For an untamper() result: the token of the startup routine already applied to these bytes.</summary>
-    public uint? UntamperedBy { get; internal set; }
     public bool Dirty { get; set; }
     /// <summary>Bumped on every change (model edit, raw patch, undo/redo).</summary>
     public int Revision { get; set; }
@@ -97,7 +95,7 @@ public sealed class JournalEntry
 public sealed class Workspace : IWriteSink, IDisposable
 {
     // Copy on write: a scan enumerates the array it started with, so a function in the same statement that opens a module
-    // (open_bytes() over embedded_pes, untamper(), open()) or closes one cannot break the enumeration ("Collection was
+    // (open_bytes() over resources, open()) or closes one cannot break the enumeration ("Collection was
     // modified" once the host asked for the scan's second batch). Reads stay allocation-free.
     LoadedModule[] _modules = [];
     public IReadOnlyList<LoadedModule> Modules => _modules;
@@ -217,18 +215,13 @@ public sealed class Workspace : IWriteSink, IDisposable
         return $"not a .NET assembly: native {(magic == 0x20B ? "PE32+" : "PE32")} {(dll ? "DLL" : "executable")} ({machine}) without a CLR header";
     }
 
-    public LoadedModule OpenBytes(byte[] bytes, string pseudoPath, bool memoryLayout = false, LoadedModule? untamperedFrom = null, uint untamperedBy = 0,
-        LoadedModule? parent = null)
+    public LoadedModule OpenBytes(byte[] bytes, string pseudoPath, bool memoryLayout = false, LoadedModule? parent = null)
     {
         int count = _modules.Length;
         var lm = OpenBytesCore(bytes, pseudoPath, memoryLayout);
         if (_modules.Length == count) return lm; // the module of that name, opened before
-        if (untamperedFrom != null) (lm.Origin, lm.DerivedFrom, lm.UntamperedBy) = ("untamper", untamperedFrom.Id, untamperedBy);
-        else
-        {
-            lm.Origin = "bytes";
-            lm.DerivedFrom = parent?.Id ?? (memoryLayout || bytes.Length < 256 ? null : Carrier(lm, bytes));
-        }
+        lm.Origin = "bytes";
+        lm.DerivedFrom = parent?.Id ?? (memoryLayout || bytes.Length < 256 ? null : Carrier(lm, bytes));
         return lm;
     }
 
@@ -301,10 +294,7 @@ public sealed class Workspace : IWriteSink, IDisposable
         }
         catch (Exception e) when (NotDotNet(bytes) is string why)
         {
-            // a native dropper may still carry a .NET payload: the raw search that needs no module
-            var carve = filePath != null && why.Contains(": native ", StringComparison.Ordinal)
-                ? $"; to look for PE files inside it: SELECT offset, size, is_dotnet FROM carve_file WHERE path = '{filePath.Replace("'", "''")}'" : "";
-            throw new SqlException(why + $" ({e.Message}){carve}");
+            throw new SqlException(why + $" ({e.Message})");
         }
         catch (BadImageFormatException) when (ClrHeaderRepair.TryRepair(bytes, out var note) is byte[] fixedBytes)
         {
@@ -428,7 +418,7 @@ public sealed class Workspace : IWriteSink, IDisposable
         var keep = _modules.SelectMany(m => m.BundleDeps.Append(m.Module.Assembly)).OfType<AssemblyDef>().ToHashSet();
         Resolver.Forget(gone.Select(m => (ModuleDef)m.Module).ToList(), keep);
         foreach (var m in gone) m.Module.Dispose();
-        // an open module with the same identity as a closed one (an untamper() copy, a second copy of a file) shared its
+        // an open module with the same identity as a closed one (a second copy of a file) shared its
         // cache entry: registered again
         foreach (var m in _modules) if (m.Module.Assembly != null) Resolver.AddToCache(m.Module);
         _memo.Clear(); // references of the other modules resolved into these

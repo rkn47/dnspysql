@@ -96,7 +96,7 @@ public static class Async
     static int Twice(int x) => x * 2;
 }
 
-// The values the app starts with, stored by the static constructor (field_inits).
+// The values the app starts with, stored by the static constructor (literals, string_refs).
 public static class Defaults
 {
     public static string Title = "City Library";

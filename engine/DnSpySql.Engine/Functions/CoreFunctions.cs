@@ -54,13 +54,13 @@ public static class CoreFunctions
 
         // ---- session / lifecycle ----
         s.Fn("open", 1, 1, a => (long)s.Open(Str(a[0], "path")).Id, "open(path)", "load another assembly/module into the session; returns its module id", "session");
-        // The next stage of a loader is usually a blob the SQL data helpers can already decode (decrypt, decompress,
-        // base64_decode, xor): this loads it as a module of its own, so it can be queried, decompiled and saved.
+        // The next stage of a loader is a blob: a resource, an overlay, or bytes the agent decoded in its own code. This
+        // loads it as a module of its own, so it can be queried, decompiled and saved.
         s.Fn("open_bytes", 1, 4, a =>
         {
-            if (a[0] == null) return null; // the decode step before it failed (decompress, decrypt, ... return NULL)
+            if (a[0] == null) return null; // the read before it found nothing (read_bytes, resources.data, ... return NULL)
             var parent = a.Arg(3) == null ? null : ws.ModuleArg(a[3]);
-            var data = a[0] as byte[] ?? throw new SqlException("open_bytes(data): data must be a blob (decode it first: decompress, decrypt, base64_decode, ...)");
+            var data = a[0] as byte[] ?? throw new SqlException("open_bytes(data): data must be a blob (a hex literal x'...', resources.data, read_bytes(), ...)");
             var name = Values.ToText(a.Arg(1)) ?? $"memory-{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data))[..12].ToLowerInvariant()}.dll";
             // the same name again is the same module only if it is the same bytes (a payload decrypted again with another key is not)
             // a native PE (a payload's next stage written in C, a dropped DLL) has no tables here: NULL and a note, so a
@@ -84,12 +84,12 @@ public static class CoreFunctions
             }
             return (long)s.OpenBytes(data, name, Values.ToLong(a.Arg(2)) == 1, parent: parent).Id;
         }, "open_bytes(data [, name [, memory_layout [, parent]]])",
-            "load a module from a blob, such as a payload decrypted or decompressed with SQL; it is only parsed, never run. " +
+            "load a module from a blob, such as a resource or a payload you decoded; it is only parsed, never run. " +
             "The name defaults to memory-<sha256 prefix>.dll, unique per payload; bytes already open return that module, with a note. " +
-            "memory_layout = 1 for an image dumped from memory. modules.derived_from names the module it came out of: found for a PE that " +
-            "embedded_pes carves (or one in a module's file as it is); pass parent for a payload decoded by hand. Returns its module id " +
+            "memory_layout = 1 for an image dumped from memory. modules.derived_from names the module it came out of: found for bytes " +
+            "that are in a module's file as they are; pass parent for a payload decoded by hand. Returns its module id " +
             "(NULL for NULL data, and for a native PE, with a note)", "session");
-        // A sample is rarely one module (untamper()'s copy, the stages it carries): closing one closes what came out of it,
+        // A sample is rarely one module (the stages it carries): closing one closes what came out of it,
         // so a long MCP session can go sample by sample without holding every module it ever opened.
         s.Fn("close", 1, 2, a =>
         {
@@ -97,7 +97,7 @@ public static class CoreFunctions
             return System.Text.Json.JsonSerializer.Serialize(ids);
         }, "close(module [, with_derived])",
             "take a module out of the session when you are done with it, with every module that came out of it (modules.derived_from: " +
-            "untamper()'s copy, stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It " +
+            "stages opened with open_bytes), and free their memory; with_derived = 0 closes that module alone. It " +
             "happens when the statement ends, with a note of the memory freed; ids are never reused, so a handle of a closed module stays an " +
             "error. Refused for a module with unsaved edits (save() first: undoing them still leaves it marked as edited) and for the one " +
             "holding the project file; a module edited later in the same statement stays open, with a note. Returns the " +
@@ -237,8 +237,8 @@ public static class CoreFunctions
             return null;
         }
 
-        // the current module first (use_module), then the others in load order; a name in several modules (an untamper()
-        // copy, a stage opened twice) gets a note, since following it into the wrong module goes unnoticed
+        // the current module first (use_module), then the others in load order; a name in several modules (two copies
+        // of a file, a stage opened twice) gets a note, since following it into the wrong module goes unnoticed
         IEnumerable<LoadedModule> order = only != null ? [only] : ws.Modules.OrderBy(m => m.Id == ws.CurrentModuleId ? 0 : 1).ThenBy(m => m.Id);
         long? found = null;
         var others = new List<int>();
@@ -248,7 +248,7 @@ public static class CoreFunctions
             if (found == null) { found = h; if (overloadNote != null) s.Notices.Add(overloadNote); }
             else others.Add(lm.Id);
         }
-        // once per statement: resolve() over many rows of an untamper() copy would otherwise note every name
+        // once per statement: resolve() over many rows of a second copy would otherwise note every name
         const string several = "resolve: names in several modules";
         if (found is long f && others.Count > 0 && !s.Notices.Any(n => n.StartsWith(several, StringComparison.Ordinal)))
             s.Notices.Add($"{several}: '{name}' is in modules {Handle.Module(f)} and {string.Join(", ", others)}; returned module {Handle.Module(f)}'s " +

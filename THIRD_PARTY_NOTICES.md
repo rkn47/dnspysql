@@ -15,11 +15,6 @@
 | System.Configuration.ConfigurationManager | settings types used by dnSpy's project exporter | MIT | https://github.com/dotnet/runtime |
 | .NET hosting (nethost) | runtime hosting | MIT | https://github.com/dotnet/runtime |
 
-## LZMA algorithm
-
-`engine/DnSpySql.Engine/Lzma.cs` implements the LZMA decoding algorithm as published in Igor Pavlov's LZMA SDK, which
-is in the public domain. No SDK source is included.
-
 ## dnSpyEx attribution and licence consequence
 
 DnSpySql vendors dnSpyEx's decompiler rather than the upstream `ICSharpCode.Decompiler` NuGet

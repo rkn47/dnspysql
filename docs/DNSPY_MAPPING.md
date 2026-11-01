@@ -281,7 +281,7 @@ any debugger stops there.
 | `binary` key/value with canonical keys (summary, tool_name, processor, filetype, image_base, entry_point, is_64bit, bits, md5, sha256 …) | ✅ (+ module/assembly/mvid/tfm keys) |
 | `runtime_settings` (UPDATE value), `sql_capabilities` feature matrix, `transactions` undo journal | ✅ |
 | Catalog for discovery | `dnspysql_tables`, `dnspysql_columns`, `dnspysql_functions` (+ `pragma_table_list`, `PRAGMA table_xinfo`) |
-| Required filters on expensive tables with an actionable error | `pseudocode`, `pseudocode_lines`, `pseudocode_refs`, `md_rows`, `analyze`, `search`, `byte_search`, `api_docs`, `split_text` say exactly which `WHERE` is needed; `il`, `locals`, `exception_handlers`, `blocks`, `cfg_edges` take the filter but also scan |
+| Required filters on expensive tables with an actionable error | `pseudocode`, `pseudocode_lines`, `pseudocode_refs`, `md_rows`, `analyze`, `search`, `byte_search`, `api_docs` say exactly which `WHERE` is needed; `il`, `locals`, `exception_handlers`, `blocks`, `cfg_edges` take the filter but also scan |
 | `pseudocode` one exact row per entity + per-line rows | `pseudocode` + `pseudocode_lines` |
 | `xrefs`, `call_edges`, `callers`, `callees`, `string_refs`, `byte_search`, `jump_entities` | ✅ (same names) |
 | `comments`, `bookmarks`, `tags`, `kv` (key/value notes) | ✅ persisted in `<input>.dnspysql.json` |

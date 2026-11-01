@@ -20,7 +20,8 @@ shows as SQLite virtual tables.
 - **Everything dnSpy shows, as tables:** metadata, IL, cross-references and the analyzer, decompiled code with its
   line ↔ IL mapping, resources and BAML, PE headers and raw bytes, PDB data, and dnSpy's breakpoint configuration.
 - **One objective:** an SQL interface to dnSpy's model. It maps the model to tables and does not analyse for you;
-  triage, config extraction and unpacking are the agent's own work, with these tables plus its own code.
+  triage, config extraction and unpacking are the agent's own work, with these tables plus its own code (the
+  workflows are agent skills in [skills/](skills/)).
 - **Edits:** `UPDATE`/`INSERT`/`DELETE` and functions change the live dnlib model, are journaled for
   `undo()`/`redo()`, and are written back with `save()`, preserving tokens.
 - **dnSpy hand-off:** comments, bookmarks and breakpoints go to dnSpy; the output and its line numbers are dnSpy's.
@@ -161,7 +162,7 @@ That opens the REPL; `.tables` lists the tables, `.schema methods` the columns o
 ```sql
 SELECT full_name, method_count FROM types ORDER BY method_count DESC LIMIT 5;
 SELECT name, detail FROM analyze WHERE target = resolve('Sample.Square::Area') AND relation = 'method.virtual_used_by';
-SELECT field_name, value FROM field_inits WHERE type_name = 'Sample.Defaults';
+SELECT value, referrer_name FROM string_refs WHERE kind = 'il';
 SELECT decompile(resolve('Sample.MemberCard::IsValid'));
 ```
 
@@ -170,7 +171,8 @@ SELECT decompile(resolve('Sample.MemberCard::IsValid'));
 > [!TIP]
 > To use DnSpySql from an AI agent, register it as an MCP server
 > ([INSTALL.md](INSTALL.md#5-connect-to-an-agent-harness-mcp)); the agent then loads samples with
-> `SELECT open('path')`.
+> `SELECT open('path')`. For triage, unpacking, deobfuscation, diffing, patching, batch runs and dnSpy debugging
+> sessions, give it the skills in [skills/](skills/).
 
 ## Usage
 
@@ -211,7 +213,7 @@ dnspysql [options] <assembly|module|exe>...
 | **Output** | `json` is a script envelope (`success`, `statement_count`, `results[{columns, rows, row_count, changes, truncated, elapsed_ms, error}]`, ...); `table` output escapes invisible, bidi and private-use characters as `\uXXXX` so obfuscated names stay readable. |
 | **REPL** | `.tables [pattern]`, `.schema [table]`, `.functions [pattern]`, `.mode`, `.modules`, `.open`, `.info`, `.undo [n]`, `.redo [n]`, `.save PATH [module]`, `.read FILE`, `.timeout MS`, `.http start [port] \| stop`. Statements end with `;`; Ctrl+C cancels the running statement. |
 | **HTTP** | `POST /query` (raw SQL, or JSON `{sql, continue_on_error, include_sql, max_rows}`; `?format=json\|text\|csv\|tsv`), `GET /status`, `GET /health`, `GET /schema`, `POST /cancel`, `POST /shutdown`. Every `/query` answer carries `X-DnSpySql-Success: true\|false` and one `X-DnSpySql-Notice` header per notice line, whatever the format; `--remote` takes its exit code and `note:` lines from them. |
-| **MCP** | Tools `dnspysql_query`, `dnspysql_schema` and `dnspysql_guide` (and the older `sql` / `schema`); `ping` and `notifications/cancelled` are answered while a query runs. The workflow guides (`dnspysql_guides`: basics, explore, triage, unpack, dnspy) are also offered as MCP prompts, with the assembly to work on as an argument. |
+| **MCP** | Tools `dnspysql_query`, `dnspysql_schema` and `dnspysql_guide` (and the older `sql` / `schema`); `ping` and `notifications/cancelled` are answered while a query runs. The guides (`dnspysql_guides`: basics, explore, dnspy) are also offered as MCP prompts, with the assembly to work on as an argument. |
 | **Notices** | A statement that writes files beside a `save()` or updates `dnSpy.xml` reports it: `note:` on stderr (CLI, REPL, `--remote`), after the text result (MCP), a `notice` field (JSON), or `X-DnSpySql-Notice` headers (HTTP). |
 
 From Claude Code, register either one server for every sample (the agent loads them with `SELECT open('path')`) or
@@ -245,7 +247,7 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 | `bundle_entries` |  | Files inside a .NET single-file bundle the module was opened from; `open_bundle_entry(path)` loads an embedded assembly |
 | `dnspysql_columns` |  | Catalog of DnSpySql columns (tables and views) |
 | `dnspysql_functions` |  | Catalog of DnSpySql SQL functions |
-| `dnspysql_guides` |  | How to use DnSpySql, one guide per workflow (basics, explore, triage, unpack, dnspy); the MCP server offers them as prompts |
+| `dnspysql_guides` |  | How to use DnSpySql's tables (basics, explore, dnspy); the MCP server offers them as prompts |
 | `dnspysql_tables` |  | Catalog of DnSpySql tables and views |
 | `exported_types` |  | ExportedType rows (type forwarders and multi-module exports) |
 | `files` |  | File table rows (multi-file assembly members) |
@@ -314,17 +316,9 @@ accepts besides `SELECT`; edits are journaled (`undo()`/`redo()`) and refused wi
 | `callees` |  | *View.* What a method calls (`WHERE method = ...`); external callees have `callee = 0` |
 | `entry_points` |  | *View.* Managed entry points, module initializers and static constructors of every module |
 | `external_calls` |  | *View.* Calls leaving the loaded modules, grouped by target (imports-like view) |
-| `method_metrics` |  | *View.* Per-method size/complexity/fan-in/fan-out/string counts for triage (hotness_score ranking) |
+| `method_metrics` |  | *View.* Per-method size/complexity/fan-in/fan-out/string counts, ranked by hotness_score |
 | `native_imports` |  | *View.* P/Invoke imports grouped by DLL |
 | `type_hierarchy` |  | *View.* Direct base type and interfaces of every type |
-
-</details>
-
-<details>
-<summary><b>Triage: protection, capabilities, configs</b> (0)</summary>
-
-| table | writes | description |
-|---|---|---|
 
 </details>
 
@@ -590,9 +584,6 @@ the agent's own work, done with these tables, the SQL utilities (`REGEXP`, `text
 
 ### The file's own bytes
 
-Some tables read the file's own bytes, the way dnSpy's hex view does, so packing, encryption and stego show up even
-where the decompiler only sees garbage:
-
 | table | what it shows |
 |---|---|
 | `method_bodies` | each body's header (tiny, fat or invalid), exception sections, whether the IL decodes, and bodies that share or overlap another; a protector that encrypts bodies until runtime leaves many that do not decode |
@@ -679,7 +670,6 @@ flowchart LR
         TAB["tables and functions"]
         TAB --> MOD["dnlib model<br/>edits, undo journal"]
         TAB --> DEC["dnSpyEx decompiler"]
-        TAB --> EMU["IL interpreter<br/>never runs the sample"]
     end
     MOD --> OUT["save(): patched assembly + XML docs<br/>dnSpy.xml: breakpoints, bookmarks"]
 ```
@@ -730,9 +720,9 @@ Issues and pull requests are welcome. Before you start:
 - A schema change regenerates `docs/SCHEMA.md` (the build does it) and the table list in this README
   (`python tools/docs/readme_tables.py --exe build/dnspysql`); existing table, column and function names keep
   working.
-- DnSpySql stays generic: tables, file formats and the interpreter's CLR semantics, not a deobfuscator for one
-  protector or a config extractor for one malware family. Naming a protector in `protections` is identification and
-  is fine.
+- DnSpySql maps dnSpy's model and nothing else: a table belongs if it is a view of dnlib metadata, the decompiler,
+  PE/PDB structure or dnSpy's windows and settings. Analysis built on top (triage, indicators, config extraction,
+  unpacking, deobfuscation) is the agent's work and goes in a skill under [skills/](skills/).
 - New source files start with the license header the existing ones carry, and contributions are under the same
   license (below).
 

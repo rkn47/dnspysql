@@ -100,7 +100,7 @@ public sealed class CodeIndex
     /// <summary>
     /// A body that is not IL: encrypted in the file (anti-tamper; method_bodies says so) while the module is as loaded,
     /// or an instruction whose operand refers to nothing. Its bytes decode to random calls and fields, which would
-    /// flood xrefs, call graphs and capabilities, so the index leaves it out.
+    /// flood xrefs and call graphs, so the index leaves it out.
     /// </summary>
     public static bool Garbage(LoadedModule lm, MethodDef m)
     {

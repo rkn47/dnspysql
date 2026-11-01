@@ -54,7 +54,7 @@ SELECT signature, mutates, description FROM dnspysql_functions WHERE name LIKE '
 
 - Tables computed from an argument need it and say so: `pseudocode`, `pseudocode_lines` and `pseudocode_refs`
   (`handle`), `analyze` (`target`), `search` (`query`), `md_rows` (`table_name`), `byte_search` (`pattern`),
-  `api_docs` (`member` or `doc_id`), `split_text` (`text`).
+  `api_docs` (`member` or `doc_id`).
 - `il`, `locals`, `exception_handlers`, `blocks` and `cfg_edges` read every body without `WHERE method = <handle>`.
 - Equality filters on `pushdown` columns are answered by the engine; other filters run after the scan. Add `LIMIT`
   while exploring.
@@ -74,3 +74,15 @@ Writes are `UPDATE`/`INSERT`/`DELETE` and the functions marked `mutates`. Each s
 usually had a NULL `resolve()`. Model edits stay in memory until `save('new/path')` (`is_dirty()`). Annotations
 (`comments`, `tags`, `bookmarks`, `breakpoints`, `kv`) persist at once in the project file; `kv` is a scratchpad for
 notes that a later session can read.
+
+## Errors you will meet
+
+| message / symptom | fix |
+|---|---|
+| `table 'X' needs a filter: WHERE ...` | add the named equality filter |
+| 0 rows where you expected some | `SELECT resolve('...')`: NULL means a wrong name (nested `/`? renamed? an overload?) |
+| `no such table` / `no such column` | check `dnspysql_tables` and `dnspysql_columns`; the error names the near ones |
+| a result marked `truncated` | raise `max_rows`, or aggregate and `LIMIT` |
+| statement interrupted / timeout | narrow the scan (filter on `method` or `module`) |
+| write refused | the session is read-only (`--readonly` or `read_only`) |
+| `note: ... dnSpy is running` | the user closes dnSpy, then `SELECT dnspy_sync()` |

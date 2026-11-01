@@ -70,12 +70,11 @@ public sealed class Session : IDisposable
         }
     }
 
-    public LoadedModule OpenBytes(byte[] bytes, string pseudoPath, bool memoryLayout, LoadedModule? untamperedFrom = null, uint untamperedBy = 0,
-        LoadedModule? parent = null)
+    public LoadedModule OpenBytes(byte[] bytes, string pseudoPath, bool memoryLayout, LoadedModule? parent = null)
     {
         lock (_lock)
         {
-            var lm = Ws.OpenBytes(bytes, pseudoPath, memoryLayout, untamperedFrom, untamperedBy, parent);
+            var lm = Ws.OpenBytes(bytes, pseudoPath, memoryLayout, parent);
             Index.Invalidate();
             return lm;
         }
